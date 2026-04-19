@@ -1,0 +1,52 @@
+sequenceDiagram
+    participant User
+    participant Page as page.tsx
+    participant API as /api/analyze
+    participant Runner as runRecoveryAgent
+    participant Fallback as runFallbackPlanner
+    participant Tools as executeTool
+    participant Data as mockData
+    participant LLM as Anthropic
+
+    User->>Page: Enter disruption prompt
+    Page->>API: POST { message }
+    API->>Runner: runRecoveryAgent(message)
+
+    alt No API key
+        Runner->>Fallback: runFallbackPlanner(message)
+        Fallback->>Tools: get_disruption_details
+        Tools->>Data: read disruption
+        Data-->>Tools: result
+        Fallback->>Tools: get_flight_context
+        Tools->>Data: read flight
+        Data-->>Tools: result
+        Fallback->>Tools: get_staffing_risk
+        Tools->>Data: read flight + disruption
+        Data-->>Tools: result
+        loop per required role
+            Fallback->>Tools: find_reassignment_options
+            Tools->>Data: read staff
+            Data-->>Tools: candidates
+        end
+        Fallback->>Tools: generate_recovery_actions
+        Tools->>Data: read flight + disruption
+        Data-->>Tools: actions
+        Fallback-->>Runner: RecoveryPlan
+    else API key present
+        Runner->>Fallback: build safety-net plan
+        Runner->>LLM: messages.create with tools
+        loop up to 6 iterations
+            LLM-->>Runner: text or tool_use blocks
+            opt tool_use returned
+                Runner->>Tools: execute requested tool
+                Tools->>Data: read mock data
+                Data-->>Tools: result
+                Tools-->>Runner: tool result
+                Runner->>LLM: continue conversation with tool_result
+            end
+        end
+        Runner-->>API: parsed plan or fallback-backed result
+    end
+
+    API-->>Page: JSON RecoveryPlan
+    Page-->>User: Render summary, actions, alternatives, and steps

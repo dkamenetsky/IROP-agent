@@ -1,0 +1,18 @@
+flowchart TD
+    U[User] --> UI[Next.js page<br/>src/app/page.tsx]
+    UI --> API[POST /api/analyze<br/>src/app/api/analyze/route.ts]
+    API --> RUNNER[runRecoveryAgent<br/>src/lib/agent/runner.ts]
+
+    RUNNER -->|No ANTHROPIC_API_KEY| FALLBACK[runFallbackPlanner<br/>src/lib/agent/fallbackPlanner.ts]
+    RUNNER -->|ANTHROPIC_API_KEY present| ANTHROPIC[Anthropic messages API]
+
+    ANTHROPIC --> TOOLS[executeTool<br/>src/lib/agent/tools.ts]
+    FALLBACK --> TOOLS
+
+    TOOLS --> DATA[(mockData.ts)]
+    DATA --> TOOLS
+
+    TOOLS --> PLAN[RecoveryPlan]
+    FALLBACK --> PLAN
+    ANTHROPIC --> PLAN
+    PLAN --> UI

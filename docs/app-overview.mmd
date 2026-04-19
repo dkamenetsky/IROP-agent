@@ -1,0 +1,12 @@
+flowchart LR
+    A[User enters a disruption scenario] --> B[App identifies the flight and disruption type]
+    B --> C[App checks mock flight data]
+    B --> D[App checks mock staffing data]
+    C --> E[App evaluates staffing risk]
+    D --> E
+    E --> F[App suggests recovery actions]
+    F --> G[Recommended staffing plan]
+    F --> H[Alternative options]
+    F --> I[Step-by-step tool trace]
+
+    J[Built-in scenarios] --> A

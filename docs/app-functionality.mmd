@@ -1,0 +1,34 @@
+flowchart LR
+    subgraph Inputs
+        A1[User types a disruption prompt]
+        A2[User selects a built-in scenario]
+    end
+
+    subgraph Analysis
+        B1[Identify the flight]
+        B2[Detect the disruption type]
+        B3[Read mock flight data]
+        B4[Read mock staffing data]
+        B5[Assess operational and staffing risk]
+        B6[Generate recovery recommendations]
+    end
+
+    subgraph Outputs
+        C1[Recovery summary]
+        C2[Recommended actions]
+        C3[Alternative options]
+        C4[Tool-step trace]
+    end
+
+    A1 --> B1
+    A2 --> B1
+    B1 --> B2
+    B2 --> B3
+    B2 --> B4
+    B3 --> B5
+    B4 --> B5
+    B5 --> B6
+    B6 --> C1
+    B6 --> C2
+    B6 --> C3
+    B6 --> C4
