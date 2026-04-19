@@ -107,6 +107,7 @@ const GET_STAFFING_STATE_TOOL = 'get_staffing_state';
 const GET_PASSENGER_RECOVERY_STATE_TOOL = 'get_passenger_recovery_state';
 const PUBLISH_PASSENGER_ANNOUNCEMENT_TOOL = 'publish_passenger_announcement';
 const REQUEST_RESERVE_STAFF_TOOL = 'request_reserve_staff';
+const OPEN_REBOOKING_SUPPORT_TOOL = 'open_rebooking_support';
 
 const BASE_FLIGHT_STATES: Record<string, MockFlightState> = {
   PD218: {
@@ -484,6 +485,25 @@ export const structuredToolDefinitions: StructuredToolDefinition[] = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: OPEN_REBOOKING_SUPPORT_TOOL,
+      description:
+        'Open extra rebooking support in the mock passenger recovery system. This is a sandbox execution tool that reduces queue pressure and manual handling backlog for the flight.',
+      parameters: {
+        type: 'object',
+        properties: {
+          flightNumber: {
+            type: 'string',
+            description: 'The airline flight number, for example PD218.',
+          },
+        },
+        required: ['flightNumber'],
+        additionalProperties: false,
+      },
+    },
+  },
 ];
 
 function deepClone<T>(value: T): T {
@@ -781,6 +801,68 @@ function publishPassengerAnnouncement(
   };
 }
 
+function openRebookingSupport(state: MockSystemState, flightNumber: string) {
+  const normalizedFlightNumber = normalizeFlightNumber(flightNumber);
+  const passengerState = state.passengerRecoveryStates[normalizedFlightNumber];
+
+  if (!passengerState) {
+    return {
+      ok: false,
+      error: {
+        code: 'FLIGHT_NOT_FOUND',
+        message: `Flight ${normalizedFlightNumber || '(empty)'} is not present in the mock passenger recovery dataset.`,
+      },
+      availableFlights: Object.keys(state.passengerRecoveryStates),
+      sourceSystem: 'mock-passenger-recovery',
+      dataFreshness: 'mock-static',
+    };
+  }
+
+  const executedAt = new Date().toISOString();
+  const manualHandlingBefore = passengerState.reaccommodationStatus.needsManualHandling;
+  const manualHandlingReduction = Math.min(manualHandlingBefore, passengerState.queueStatus === 'critical' ? 14 : 8);
+  const alreadyProtectedIncrease = Math.min(manualHandlingReduction, Math.max(manualHandlingBefore - 2, 0));
+
+  passengerState.reaccommodationStatus.needsManualHandling = Math.max(manualHandlingBefore - manualHandlingReduction, 0);
+  passengerState.reaccommodationStatus.alreadyProtected += alreadyProtectedIncrease;
+
+  if (passengerState.queueStatus === 'critical') passengerState.queueStatus = 'building';
+  else if (passengerState.queueStatus === 'building') passengerState.queueStatus = 'stable';
+
+  passengerState.communicationStatus.nextRecommendedMessage =
+    'Extra rebooking support is now open. Direct passengers needing help to the recovery desk and repeat that message at the gate.';
+  passengerState.communicationStatus.announcementReady = true;
+  passengerState.topConcerns = [
+    'Extra rebooking support is open, but priority and special-assistance passengers still need visible triage.',
+    ...passengerState.topConcerns.filter((concern) => !concern.toLowerCase().includes('queue growth')),
+  ].slice(0, 2);
+
+  state.actionLog.push({
+    tool: OPEN_REBOOKING_SUPPORT_TOOL,
+    flightNumber: normalizedFlightNumber,
+    status: 'executed',
+    executedAt,
+    details: {
+      manualHandlingBefore,
+      manualHandlingAfter: passengerState.reaccommodationStatus.needsManualHandling,
+      queueStatusAfter: passengerState.queueStatus,
+    },
+  });
+
+  return {
+    ok: true,
+    sourceSystem: 'mock-passenger-recovery',
+    dataFreshness: 'mock-static-updated',
+    action: {
+      tool: OPEN_REBOOKING_SUPPORT_TOOL,
+      flightNumber: normalizedFlightNumber,
+      executedAt,
+      result: 'opened',
+    },
+    passengerRecovery: passengerState,
+  };
+}
+
 function requestReserveStaff(
   state: MockSystemState,
   flightNumber: string,
@@ -932,6 +1014,10 @@ export function executeStructuredTool(state: MockSystemState, name: string, rawA
       String(parsedArguments.role || ''),
       String(parsedArguments.staffName || ''),
     );
+  }
+
+  if (name === OPEN_REBOOKING_SUPPORT_TOOL) {
+    return openRebookingSupport(state, String(parsedArguments.flightNumber || ''));
   }
 
   return {

@@ -110,6 +110,15 @@ export interface AnalyzeInput {
   message?: string;
 }
 
+export interface IncidentContext {
+  input: AnalyzeInput;
+  observedFlight: Record<string, unknown> | null;
+  observedDisruption: Record<string, unknown> | null;
+  observedStaffing: Record<string, unknown> | null;
+  observedPassengerRecovery: Record<string, unknown> | null;
+  actionLog: Array<Record<string, unknown>>;
+}
+
 export interface RecoveryPlan {
   summary: string;
   disruptedFlight: string;
@@ -126,4 +135,5 @@ export interface RecoveryPlan {
   alternatives: string[];
   steps: ToolStep[];
   mode: RecoveryMode;
+  incidentContext?: IncidentContext;
 }

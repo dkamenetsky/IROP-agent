@@ -1,8 +1,10 @@
 import { runFallbackPlanner } from '@/lib/agent/fallbackPlanner';
 import { createMockSystemState, executeStructuredTool, structuredToolDefinitions, type MockSystemState } from '@/lib/agent/structuredTools';
+import { createOpenRouterCompletion, type OpenRouterMessage } from '@/lib/openrouter';
 import {
   AnalyzeInput,
   EscalationStep,
+  IncidentContext,
   PassengerRecoveryAction,
   RecoveryAction,
   RecoveryPlan,
@@ -12,39 +14,6 @@ import {
   StaffingOption,
   ToolStep,
 } from '@/lib/types';
-
-type OpenRouterRole = 'system' | 'user' | 'assistant' | 'tool';
-
-interface OpenRouterToolCall {
-  id: string;
-  type: 'function';
-  function: {
-    name: string;
-    arguments: string;
-  };
-}
-
-interface OpenRouterMessage {
-  role: OpenRouterRole;
-  content: string | null;
-  tool_call_id?: string;
-  tool_calls?: OpenRouterToolCall[];
-}
-
-interface OpenRouterChoice {
-  message?: {
-    role?: string;
-    content?: string | null;
-    tool_calls?: OpenRouterToolCall[];
-  };
-}
-
-interface OpenRouterResponse {
-  choices?: OpenRouterChoice[];
-  error?: {
-    message?: string;
-  };
-}
 
 interface AgentIncidentState {
   input: AnalyzeInput;
@@ -58,9 +27,7 @@ interface AgentIncidentState {
   }>;
 }
 
-const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
-const DEFAULT_OPENROUTER_MODEL = 'openai/gpt-4o-mini';
-const MAX_TOOL_ITERATIONS = 20;
+const MAX_TOOL_ITERATIONS = 24;
 const STAFF_ROLES: StaffRole[] = ['Gate', 'Ramp', 'Customer Service', 'Operations'];
 
 const SYSTEM_PROMPT = `You are an airline IROP recovery agent operating in a hackathon sandbox.
@@ -72,6 +39,8 @@ Tool rules:
 - If staffing shows a watch or gap and a reserve option is available, use request_reserve_staff once before you finalize.
 - After request_reserve_staff, call get_staffing_state again so your final answer reflects the updated state.
 - Before you finalize passenger impact or passenger actions, call get_passenger_recovery_state for the same flight.
+- If passenger recovery shows a critical queue or a large manual handling backlog, use open_rebooking_support before you finalize passenger recovery recommendations.
+- After open_rebooking_support, call get_passenger_recovery_state again so your final answer reflects the updated state.
 - If passenger recovery says an announcement is ready, use publish_passenger_announcement before you finalize.
 - After publish_passenger_announcement, call get_passenger_recovery_state again so your final answer reflects the updated state.
 - Treat tool output as the authoritative system of record for this prototype.
@@ -363,6 +332,17 @@ function getReserveStaffActionCandidate(staffingRecord: Record<string, unknown> 
   return null;
 }
 
+function needsRebookingSupport(passengerRecord: Record<string, unknown> | null) {
+  if (!passengerRecord) return false;
+
+  const queueStatus = asString(passengerRecord.queueStatus);
+  const reaccommodationStatus = asRecord(passengerRecord.reaccommodationStatus);
+  const needsManualHandling =
+    typeof reaccommodationStatus.needsManualHandling === 'number' ? reaccommodationStatus.needsManualHandling : 0;
+
+  return queueStatus === 'critical' || needsManualHandling >= 25;
+}
+
 function derivePassengerActionsFromObservedState(passengerRecord: Record<string, unknown> | null): PassengerRecoveryAction[] {
   if (!passengerRecord) return [];
 
@@ -425,6 +405,23 @@ function derivePassengerActionsFromObservedState(passengerRecord: Record<string,
 function passengerAnnouncementReady(passengerRecord: Record<string, unknown> | null) {
   const communicationStatus = asRecord(passengerRecord?.communicationStatus);
   return communicationStatus.announcementReady === true;
+}
+
+function buildIncidentContext(incidentState: AgentIncidentState): IncidentContext {
+  return {
+    input: { ...incidentState.input },
+    observedFlight: getObservedFlightRecord(incidentState),
+    observedDisruption: getObservedPrimaryDisruption(getObservedFlightRecord(incidentState)),
+    observedStaffing: getObservedStaffingRecord(incidentState),
+    observedPassengerRecovery: getObservedPassengerRecoveryRecord(incidentState),
+    actionLog: incidentState.systemState.actionLog.map((entry) => ({
+      tool: entry.tool,
+      flightNumber: entry.flightNumber,
+      status: entry.status,
+      executedAt: entry.executedAt,
+      details: entry.details,
+    })),
+  };
 }
 
 function formatObservedImpactedWindow(
@@ -548,6 +545,23 @@ function summarizeToolExecution(toolName: string, input: Record<string, unknown>
     )}.`;
   }
 
+  if (toolName === 'open_rebooking_support') {
+    if (record.ok !== true) {
+      const errorRecord = asRecord(record.error);
+      return asString(errorRecord.message, 'Rebooking support action failed.');
+    }
+
+    const passengerRecovery = asRecord(record.passengerRecovery);
+    const reaccommodationStatus = asRecord(passengerRecovery.reaccommodationStatus);
+    const manualHandling =
+      typeof reaccommodationStatus.needsManualHandling === 'number' ? reaccommodationStatus.needsManualHandling : 0;
+
+    return `Opened extra rebooking support. Passenger queue is now ${asString(
+      passengerRecovery.queueStatus,
+      'unknown',
+    )} and manual handling is down to ${manualHandling}.`;
+  }
+
   return `${toolName} executed.`;
 }
 
@@ -610,6 +624,7 @@ function normalizeRecoveryPlan(rawPlan: unknown, input: AnalyzeInput, incidentSt
     alternatives: asArray(record.alternatives).map((item) => asString(item)).filter(Boolean),
     steps: incidentState.toolSteps,
     mode: 'openrouter-agent',
+    incidentContext: buildIncidentContext(incidentState),
   };
 }
 
@@ -637,41 +652,8 @@ async function buildFallbackPlanWithAgentTrace(
     ...fallbackPlan,
     summary: `${fallbackPlan.summary} The AI agent path was attempted first, then handed off to the backup planner.`,
     steps: agentSteps.length ? agentSteps : fallbackPlan.steps,
+    incidentContext: buildIncidentContext(incidentState),
   };
-}
-
-async function createOpenRouterCompletion(messages: OpenRouterMessage[]): Promise<OpenRouterResponse> {
-  const apiKey = process.env.OPENROUTER_API_KEY;
-
-  if (!apiKey) {
-    throw new Error('OPENROUTER_API_KEY is not configured.');
-  }
-
-  const response = await fetch(OPENROUTER_URL, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-      'HTTP-Referer': 'http://localhost:3000',
-      'X-Title': 'irop-agent-prototype',
-    },
-    body: JSON.stringify({
-      model: process.env.OPENROUTER_MODEL || DEFAULT_OPENROUTER_MODEL,
-      messages,
-      tools: structuredToolDefinitions,
-      tool_choice: 'auto',
-      parallel_tool_calls: false,
-      temperature: 0.2,
-    }),
-  });
-
-  const payload = (await response.json()) as OpenRouterResponse;
-
-  if (!response.ok) {
-    throw new Error(payload.error?.message || 'OpenRouter request failed.');
-  }
-
-  return payload;
 }
 
 export async function runRecoveryAgent(input: AnalyzeInput, runtimeConfig: RuntimeConfig): Promise<RecoveryPlan> {
@@ -690,7 +672,13 @@ export async function runRecoveryAgent(input: AnalyzeInput, runtimeConfig: Runti
   ];
 
   for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration += 1) {
-    const completion = await createOpenRouterCompletion(messages);
+    const completion = await createOpenRouterCompletion({
+      messages,
+      tools: structuredToolDefinitions,
+      toolChoice: 'auto',
+      parallelToolCalls: false,
+      temperature: 0.2,
+    });
     const assistantMessage = completion.choices?.[0]?.message;
 
     if (!assistantMessage) {
@@ -797,7 +785,31 @@ export async function runRecoveryAgent(input: AnalyzeInput, runtimeConfig: Runti
 
     const observedPassengerRecovery = getObservedPassengerRecoveryRecord(incidentState);
     const lastPassengerObservationIndex = getLastToolIndex(incidentState, 'get_passenger_recovery_state');
+    const lastRebookingSupportActionIndex = getLastToolIndex(incidentState, 'open_rebooking_support');
     const lastAnnouncementActionIndex = getLastToolIndex(incidentState, 'publish_passenger_announcement');
+
+    if (needsRebookingSupport(observedPassengerRecovery) && lastRebookingSupportActionIndex < 0) {
+      const observedFlight = getObservedFlightRecord(incidentState);
+      const flightNumber = asString(observedFlight?.flightNumber, input.flightNumber || 'the same flight');
+      messages.push({
+        role: 'user',
+        content: `Before you finalize, call open_rebooking_support for ${flightNumber}, then continue.`,
+      });
+      continue;
+    }
+
+    if (
+      lastRebookingSupportActionIndex >= 0 &&
+      !hasToolAfterIndex(incidentState, 'get_passenger_recovery_state', lastRebookingSupportActionIndex)
+    ) {
+      const observedFlight = getObservedFlightRecord(incidentState);
+      const flightNumber = asString(observedFlight?.flightNumber, input.flightNumber || 'the same flight');
+      messages.push({
+        role: 'user',
+        content: `You executed open_rebooking_support for ${flightNumber}. Call get_passenger_recovery_state again before finalizing so your answer reflects the updated passenger state.`,
+      });
+      continue;
+    }
 
     if (passengerAnnouncementReady(observedPassengerRecovery) && lastAnnouncementActionIndex < lastPassengerObservationIndex) {
       const observedFlight = getObservedFlightRecord(incidentState);

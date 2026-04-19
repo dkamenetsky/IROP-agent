@@ -48,10 +48,12 @@ Implemented now:
 - `get_passenger_recovery_state(flightNumber)`
 - `publish_passenger_announcement(flightNumber, messageType, messageBody)`
 - `request_reserve_staff(flightNumber, role, staffName)`
+- `open_rebooking_support(flightNumber)`
 - OpenRouter tool-calling loop
 - server-owned tool trace
 - grounded staffing risk, staffing options, and passenger pressure
 - mock state-changing execution with re-observation
+- manager follow-up Q&A tied to the current incident context
 
 Current demo story:
 
@@ -61,9 +63,11 @@ Current demo story:
 - the agent checks the mock passenger recovery system,
 - the agent can publish a mock passenger announcement,
 - the agent can assign reserve staff in the mock staffing system,
+- the agent can open extra mock rebooking support when passenger pressure is high,
 - the agent re-checks staffing after reserve assignment,
 - the agent re-checks passenger state,
 - the agent produces a recovery plan from the updated observed state.
+- the manager can ask follow-up questions about that exact incident and get grounded answers.
 
 ## Demo Roadmap
 
@@ -137,10 +141,10 @@ Objective:
 Implemented now:
 
 - `request_reserve_staff`
+- `open_rebooking_support`
 
 Still planned:
 
-- `open_rebooking_support`
 - `draft_station_briefing`
 - `draft_escalation_message`
 
@@ -164,6 +168,24 @@ Expected demo behavior:
 
 - the agent can reason beyond a single narrow fact source
 - tradeoffs feel more operationally realistic
+
+### Stage 6: Incident Q&A
+
+Status: implemented
+
+Objective:
+
+- let a manager interrogate the current incident without turning the demo into a generic chatbot
+
+Implemented now:
+
+- manager follow-up questions tied to the current plan, tool trace, and observed incident state
+
+Expected demo behavior:
+
+- the manager can ask freeform questions about the current disruption
+- the answer stays grounded in the incident context
+- the demo becomes interactive without losing the agent story
 
 ## What Not To Build Yet
 

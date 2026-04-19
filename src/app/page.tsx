@@ -14,6 +14,13 @@ const defaultInput: AnalyzeInput = {
   message: '',
 };
 
+const followUpPrompts = [
+  'Why did the AI choose this plan?',
+  'What changed after the AI actions?',
+  'What should I tell passengers in simple words?',
+  'What is the biggest risk right now?',
+];
+
 function tone(level: 'low' | 'medium' | 'high') {
   if (level === 'high') return 'border-rose-700/50 bg-rose-950/50 text-rose-200';
   if (level === 'medium') return 'border-amber-700/50 bg-amber-950/50 text-amber-200';
@@ -30,8 +37,10 @@ function toolLabel(tool: string) {
   if (tool === 'get_flight_state') return 'Checked flight status';
   if (tool === 'get_staffing_state') return 'Checked staffing';
   if (tool === 'get_passenger_recovery_state') return 'Checked passenger impact';
+  if (tool === 'open_rebooking_support') return 'Opened rebooking support';
   if (tool === 'publish_passenger_announcement') return 'Sent passenger update';
   if (tool === 'request_reserve_staff') return 'Assigned reserve staff';
+  if (tool === 'agent_fallback') return 'Agent handoff';
   return tool;
 }
 
@@ -41,6 +50,10 @@ export default function HomePage() {
   const [result, setResult] = useState<RecoveryPlan | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [followUpQuestion, setFollowUpQuestion] = useState('');
+  const [followUpAnswer, setFollowUpAnswer] = useState<string | null>(null);
+  const [followUpLoading, setFollowUpLoading] = useState(false);
+  const [followUpError, setFollowUpError] = useState<string | null>(null);
 
   useEffect(() => {
     const config = readBrowserRuntimeConfig();
@@ -51,9 +64,17 @@ export default function HomePage() {
     }));
   }, []);
 
+  function clearFollowUp() {
+    setFollowUpQuestion('');
+    setFollowUpAnswer(null);
+    setFollowUpError(null);
+    setFollowUpLoading(false);
+  }
+
   async function analyze(payload: AnalyzeInput = input) {
     setLoading(true);
     setError(null);
+    clearFollowUp();
 
     try {
       const res = await fetch('/api/analyze', {
@@ -85,6 +106,40 @@ export default function HomePage() {
       message: scenario.message,
     });
     setError(null);
+    clearFollowUp();
+  }
+
+  async function askFollowUp(questionOverride?: string) {
+    const question = (questionOverride ?? followUpQuestion).trim();
+    if (!result || !question) return;
+
+    setFollowUpLoading(true);
+    setFollowUpError(null);
+    setFollowUpAnswer(null);
+    setFollowUpQuestion(question);
+
+    try {
+      const res = await fetch('/api/follow-up', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          question,
+          input: result.incidentContext?.input || input,
+          plan: result,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Follow-up request failed');
+      }
+
+      setFollowUpAnswer(data.answer);
+    } catch (err) {
+      setFollowUpError(err instanceof Error ? err.message : 'Unexpected error');
+    } finally {
+      setFollowUpLoading(false);
+    }
   }
 
   return (
@@ -178,6 +233,7 @@ export default function HomePage() {
                   });
                   setResult(null);
                   setError(null);
+                  clearFollowUp();
                 }}
                 className="rounded-2xl border border-slate-700 px-5 py-3 font-semibold text-slate-200"
               >
@@ -229,12 +285,22 @@ export default function HomePage() {
                 </div>
               </div>
 
-              {result.steps.some((step) => step.tool === 'publish_passenger_announcement' || step.tool === 'request_reserve_staff') ? (
+              {result.steps.some(
+                (step) =>
+                  step.tool === 'publish_passenger_announcement' ||
+                  step.tool === 'request_reserve_staff' ||
+                  step.tool === 'open_rebooking_support',
+              ) ? (
                 <div className="rounded-3xl border border-emerald-800/50 bg-emerald-950/20 p-5">
                   <div className="text-sm font-semibold text-emerald-200">AI already did this</div>
                   <div className="mt-3 space-y-3">
                     {result.steps
-                      .filter((step) => step.tool === 'publish_passenger_announcement' || step.tool === 'request_reserve_staff')
+                      .filter(
+                        (step) =>
+                          step.tool === 'publish_passenger_announcement' ||
+                          step.tool === 'request_reserve_staff' ||
+                          step.tool === 'open_rebooking_support',
+                      )
                       .map((step, index) => (
                         <div key={`${step.tool}-${index}`} className="rounded-2xl border border-emerald-900/60 bg-slate-950/70 p-4">
                           <div className="text-sm font-medium text-emerald-200">{toolLabel(step.tool)}</div>
@@ -314,6 +380,53 @@ export default function HomePage() {
                   </div>
                 ))}
               </Section>
+
+              <div className="rounded-3xl border border-slate-800 bg-slate-950 p-5">
+                <div className="text-sm font-semibold text-slate-200">Ask about this plan</div>
+                <div className="mt-1 text-sm text-slate-400">
+                  Ask anything about this disruption. The answer stays tied to this flight, this plan, and the mock systems the AI checked.
+                </div>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {followUpPrompts.map((prompt) => (
+                    <button
+                      key={prompt}
+                      onClick={() => void askFollowUp(prompt)}
+                      disabled={followUpLoading}
+                      className="rounded-full border border-slate-700 bg-slate-900 px-3 py-1.5 text-xs text-slate-300 transition hover:border-sky-700 hover:text-sky-200 disabled:opacity-50"
+                    >
+                      {prompt}
+                    </button>
+                  ))}
+                </div>
+                <div className="mt-4 flex flex-col gap-3 md:flex-row">
+                  <input
+                    value={followUpQuestion}
+                    onChange={(event) => setFollowUpQuestion(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' && !event.shiftKey) {
+                        event.preventDefault();
+                        void askFollowUp();
+                      }
+                    }}
+                    placeholder="Example: Why did you open rebooking support?"
+                    className="flex-1 rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3 text-sm outline-none placeholder:text-slate-500"
+                  />
+                  <button
+                    onClick={() => void askFollowUp()}
+                    disabled={followUpLoading || !followUpQuestion.trim()}
+                    className="rounded-2xl bg-sky-500 px-5 py-3 text-sm font-semibold text-slate-950 transition hover:bg-sky-400 disabled:opacity-50"
+                  >
+                    {followUpLoading ? 'Answering...' : 'Ask AI'}
+                  </button>
+                </div>
+                {followUpError ? <div className="mt-3 text-sm text-rose-300">{followUpError}</div> : null}
+                {followUpAnswer ? (
+                  <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-900 p-4">
+                    <div className="text-xs uppercase tracking-wide text-slate-500">Answer</div>
+                    <div className="mt-2 text-sm leading-6 text-slate-200">{followUpAnswer}</div>
+                  </div>
+                ) : null}
+              </div>
 
               <details className="rounded-3xl border border-slate-800 bg-slate-950 p-5">
                 <summary className="cursor-pointer text-sm font-semibold text-slate-200">How the AI worked</summary>
