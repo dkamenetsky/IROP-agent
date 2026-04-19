@@ -67,9 +67,9 @@ You must gather facts with tools before making a recovery recommendation.
 
 Tool rules:
 - If a flight number is present or can be inferred, call get_flight_state before you answer.
+- After observing the flight, call get_staffing_state for the same flight before you finalize any staffing recommendation or staffing risk.
 - Treat tool output as the authoritative system of record for this prototype.
 - Do not invent live staffing assignments or external system actions that cannot be verified from the available tool data.
-- If staffing availability cannot be verified in this iteration, keep recommendedStaff as null and say that verification requires a future staffing tool.
 - Do not narrate tool execution history. The server will record actual tool steps separately.
 
 Return only valid JSON and nothing else. Do not use markdown fences.
@@ -258,6 +258,53 @@ function getObservedPrimaryDisruption(flightRecord: Record<string, unknown> | nu
   return activeDisruption || disruptions[0] || null;
 }
 
+function getObservedStaffingRecord(incidentState: AgentIncidentState): Record<string, unknown> | null {
+  const latestStaffingState = [...incidentState.toolOutputs]
+    .reverse()
+    .find((item) => item.toolName === 'get_staffing_state');
+
+  if (!latestStaffingState) return null;
+
+  const output = asRecord(latestStaffingState.output);
+  if (output.ok !== true) return null;
+
+  const staffing = asRecord(output.staffing);
+  return Object.keys(staffing).length ? staffing : null;
+}
+
+function hasObservedTool(incidentState: AgentIncidentState, toolName: string) {
+  return incidentState.toolOutputs.some((item) => item.toolName === toolName);
+}
+
+function deriveStaffingOptionsFromObservedState(staffingRecord: Record<string, unknown> | null): StaffingOption[] {
+  if (!staffingRecord) return [];
+
+  return asArray(staffingRecord.roleCoverage)
+    .map(asRecord)
+    .map((entry) => {
+      const role = asString(entry.role) as StaffRole;
+      if (!STAFF_ROLES.includes(role)) return null;
+
+      const statusValue = asString(entry.status);
+      const status: StaffingOption['status'] =
+        statusValue === 'ready' || statusValue === 'watch' || statusValue === 'gap' ? statusValue : 'watch';
+
+      const complianceRisks = asArray(entry.complianceRisks).map((item) => asString(item)).filter(Boolean);
+      const baseReason = asString(entry.reason, 'Observed staffing state is available.');
+
+      return {
+        role,
+        required: typeof entry.required === 'number' && Number.isFinite(entry.required) ? entry.required : 0,
+        status,
+        recommendedStaff: typeof entry.recommendedStaff === 'string' ? entry.recommendedStaff : null,
+        backups: asArray(entry.backups).map((item) => asString(item)).filter(Boolean),
+        reason: complianceRisks.length ? `${baseReason} Compliance watch: ${complianceRisks.join('; ')}.` : baseReason,
+        excludedCandidates: asArray(entry.excludedCandidates).map((item) => asString(item)).filter(Boolean),
+      } satisfies StaffingOption;
+    })
+    .filter((item): item is StaffingOption => Boolean(item));
+}
+
 function formatObservedImpactedWindow(
   flightRecord: Record<string, unknown> | null,
   disruptionRecord: Record<string, unknown> | null,
@@ -322,6 +369,22 @@ function summarizeToolExecution(toolName: string, input: Record<string, unknown>
     return `Observed ${flightNumber} at ${gate} with ${disruptionSummary}.`;
   }
 
+  if (toolName === 'get_staffing_state') {
+    if (record.ok !== true) {
+      const errorRecord = asRecord(record.error);
+      return asString(errorRecord.message, 'Staffing state lookup failed.');
+    }
+
+    const staffing = asRecord(record.staffing);
+    const overallRisk = asString(staffing.overallRisk, 'unknown');
+    const roleCoverage = asArray(staffing.roleCoverage)
+      .map(asRecord)
+      .map((entry) => `${asString(entry.role)}: ${asString(entry.status)} with ${asString(entry.recommendedStaff, 'no primary candidate')}`)
+      .filter(Boolean);
+
+    return `Observed staffing risk ${overallRisk}. ${roleCoverage.join('; ')}.`;
+  }
+
   return `${toolName} executed.`;
 }
 
@@ -329,6 +392,8 @@ function normalizeRecoveryPlan(rawPlan: unknown, input: AnalyzeInput, incidentSt
   const record = asRecord(rawPlan);
   const observedFlight = getObservedFlightRecord(incidentState);
   const observedDisruption = getObservedPrimaryDisruption(observedFlight);
+  const observedStaffing = getObservedStaffingRecord(incidentState);
+  const observedStaffingOptions = deriveStaffingOptionsFromObservedState(observedStaffing);
 
   const actions = asArray(record.actions)
     .map(normalizeRecoveryAction)
@@ -339,7 +404,7 @@ function normalizeRecoveryPlan(rawPlan: unknown, input: AnalyzeInput, incidentSt
   const timeline = asArray(record.timeline)
     .map(normalizeTimelineStep)
     .filter((item): item is EscalationStep => Boolean(item));
-  const staffingOptions = asArray(record.staffingOptions)
+  const modelStaffingOptions = asArray(record.staffingOptions)
     .map(normalizeStaffingOption)
     .filter((item): item is StaffingOption => Boolean(item));
   const recommendedNextAction = normalizeRecoveryAction(record.recommendedNextAction) || actions[0] || {
@@ -348,6 +413,7 @@ function normalizeRecoveryPlan(rawPlan: unknown, input: AnalyzeInput, incidentSt
     reason: 'Begin with the tool-observed disruption details before expanding to more systems.',
     impact: 'Keeps the station aligned on verified facts.',
   };
+  const observedOverallRisk = asRiskLevel(observedStaffing?.overallRisk, 'medium');
 
   return {
     summary: asString(
@@ -357,7 +423,7 @@ function normalizeRecoveryPlan(rawPlan: unknown, input: AnalyzeInput, incidentSt
     disruptedFlight: asString(record.disruptedFlight, asString(observedFlight?.flightNumber, input.flightNumber || 'Unknown flight')),
     disruptionType: asString(record.disruptionType, asString(observedDisruption?.label, input.disruptionTypeId || 'Unknown disruption')),
     impactedWindow: asString(record.impactedWindow, formatObservedImpactedWindow(observedFlight, observedDisruption)),
-    staffingRisk: asRiskLevel(record.staffingRisk, 'medium'),
+    staffingRisk: observedStaffing ? observedOverallRisk : asRiskLevel(record.staffingRisk, 'medium'),
     passengerImpact: asString(
       record.passengerImpact,
       asString(observedDisruption?.passengerImpact, 'Passenger impact requires confirmation from additional tools.'),
@@ -369,7 +435,7 @@ function normalizeRecoveryPlan(rawPlan: unknown, input: AnalyzeInput, incidentSt
     recommendedNextAction,
     actions,
     timeline,
-    staffingOptions,
+    staffingOptions: observedStaffingOptions.length ? observedStaffingOptions : modelStaffingOptions,
     passengerActions,
     alternatives: asArray(record.alternatives).map((item) => asString(item)).filter(Boolean),
     steps: incidentState.toolSteps,
@@ -477,6 +543,24 @@ export async function runRecoveryAgent(input: AnalyzeInput, runtimeConfig: Runti
     const finalContent = assistantMessage.content;
     if (!finalContent) {
       throw new Error('OpenRouter returned an empty final response.');
+    }
+
+    if (!hasObservedTool(incidentState, 'get_flight_state')) {
+      messages.push({
+        role: 'user',
+        content: 'Before you finalize, call get_flight_state for the disrupted flight and then continue.',
+      });
+      continue;
+    }
+
+    if (!hasObservedTool(incidentState, 'get_staffing_state')) {
+      const observedFlight = getObservedFlightRecord(incidentState);
+      const flightNumber = asString(observedFlight?.flightNumber, input.flightNumber || 'the same flight');
+      messages.push({
+        role: 'user',
+        content: `Before you finalize, call get_staffing_state for ${flightNumber} and then continue with the final JSON response.`,
+      });
+      continue;
     }
 
     return normalizeRecoveryPlan(extractJsonObject(finalContent), input, incidentState);
