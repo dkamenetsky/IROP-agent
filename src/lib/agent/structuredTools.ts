@@ -68,6 +68,28 @@ interface StaffingCoverageEntry {
 
 const GET_FLIGHT_STATE_TOOL = 'get_flight_state';
 const GET_STAFFING_STATE_TOOL = 'get_staffing_state';
+const GET_PASSENGER_RECOVERY_STATE_TOOL = 'get_passenger_recovery_state';
+
+interface MockPassengerRecoveryState {
+  flightNumber: string;
+  totalPassengers: number;
+  impactedPassengers: number;
+  misconnectRisk: 'low' | 'medium' | 'high';
+  queueStatus: 'stable' | 'building' | 'critical';
+  specialAssistanceCount: number;
+  priorityPassengerCount: number;
+  reaccommodationStatus: {
+    alreadyProtected: number;
+    needsManualHandling: number;
+    selfServeEligible: number;
+  };
+  communicationStatus: {
+    lastUpdateSent: string;
+    nextRecommendedMessage: string;
+    announcementReady: boolean;
+  };
+  topConcerns: string[];
+}
 
 const MOCK_FLIGHT_STATES: Record<string, MockFlightState> = {
   PD218: {
@@ -261,6 +283,78 @@ const MOCK_STAFF_ROSTER: MockStaffRecord[] = [
   },
 ];
 
+const MOCK_PASSENGER_RECOVERY_STATE: Record<string, MockPassengerRecoveryState> = {
+  PD218: {
+    flightNumber: 'PD218',
+    totalPassengers: 94,
+    impactedPassengers: 94,
+    misconnectRisk: 'medium',
+    queueStatus: 'building',
+    specialAssistanceCount: 5,
+    priorityPassengerCount: 11,
+    reaccommodationStatus: {
+      alreadyProtected: 0,
+      needsManualHandling: 18,
+      selfServeEligible: 76,
+    },
+    communicationStatus: {
+      lastUpdateSent: '2026-04-17T16:35:00',
+      nextRecommendedMessage: 'Delay update with revised departure expectations and gate presence guidance.',
+      announcementReady: true,
+    },
+    topConcerns: [
+      'Gate-area crowding is increasing as passengers wait for a revised departure update.',
+      'A moderate number of connecting passengers may need proactive timing support.',
+    ],
+  },
+  PD412: {
+    flightNumber: 'PD412',
+    totalPassengers: 76,
+    impactedPassengers: 76,
+    misconnectRisk: 'high',
+    queueStatus: 'critical',
+    specialAssistanceCount: 6,
+    priorityPassengerCount: 9,
+    reaccommodationStatus: {
+      alreadyProtected: 21,
+      needsManualHandling: 29,
+      selfServeEligible: 26,
+    },
+    communicationStatus: {
+      lastUpdateSent: '2026-04-17T17:05:00',
+      nextRecommendedMessage: 'Cancellation message with rebooking and service-desk routing instructions.',
+      announcementReady: true,
+    },
+    topConcerns: [
+      'Manual reaccommodation pressure is high and priority passengers need fast triage.',
+      'Queue growth is likely unless visible rebooking support is added quickly.',
+    ],
+  },
+  PD305: {
+    flightNumber: 'PD305',
+    totalPassengers: 88,
+    impactedPassengers: 88,
+    misconnectRisk: 'low',
+    queueStatus: 'stable',
+    specialAssistanceCount: 4,
+    priorityPassengerCount: 8,
+    reaccommodationStatus: {
+      alreadyProtected: 0,
+      needsManualHandling: 6,
+      selfServeEligible: 82,
+    },
+    communicationStatus: {
+      lastUpdateSent: '2026-04-17T17:40:00',
+      nextRecommendedMessage: 'Gate change message with repeated wayfinding and boarding location reminders.',
+      announcementReady: true,
+    },
+    topConcerns: [
+      'Passengers at the original gate may miss the move without repeated direction.',
+      'Special-assistance travelers need support during the gate transition.',
+    ],
+  },
+};
+
 export const structuredToolDefinitions: StructuredToolDefinition[] = [
   {
     type: 'function',
@@ -287,6 +381,25 @@ export const structuredToolDefinitions: StructuredToolDefinition[] = [
       name: GET_STAFFING_STATE_TOOL,
       description:
         'Read staffing coverage, reserve depth, and compliance-sensitive constraints for one disrupted flight from the station staffing system.',
+      parameters: {
+        type: 'object',
+        properties: {
+          flightNumber: {
+            type: 'string',
+            description: 'The airline flight number, for example PD218.',
+          },
+        },
+        required: ['flightNumber'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: GET_PASSENGER_RECOVERY_STATE_TOOL,
+      description:
+        'Read passenger recovery pressure, communication readiness, and reaccommodation status for one disrupted flight from the customer recovery system.',
       parameters: {
         type: 'object',
         properties: {
@@ -491,6 +604,32 @@ export function getStaffingState(flightNumber: string) {
   };
 }
 
+export function getPassengerRecoveryState(flightNumber: string) {
+  const normalizedFlightNumber = normalizeFlightNumber(flightNumber);
+  const passengerState = MOCK_PASSENGER_RECOVERY_STATE[normalizedFlightNumber];
+
+  if (!passengerState) {
+    return {
+      ok: false,
+      error: {
+        code: 'FLIGHT_NOT_FOUND',
+        message: `Flight ${normalizedFlightNumber || '(empty)'} is not present in the mock passenger recovery dataset.`,
+      },
+      availableFlights: Object.keys(MOCK_PASSENGER_RECOVERY_STATE),
+      sourceSystem: 'mock-passenger-recovery',
+      dataFreshness: 'mock-static',
+    };
+  }
+
+  return {
+    ok: true,
+    sourceSystem: 'mock-passenger-recovery',
+    dataFreshness: 'mock-static',
+    flightNumber: normalizedFlightNumber,
+    passengerRecovery: passengerState,
+  };
+}
+
 export function executeStructuredTool(name: string, rawArguments: string): unknown {
   let parsedArguments: Record<string, unknown> = {};
 
@@ -512,6 +651,10 @@ export function executeStructuredTool(name: string, rawArguments: string): unkno
 
   if (name === GET_STAFFING_STATE_TOOL) {
     return getStaffingState(String(parsedArguments.flightNumber || ''));
+  }
+
+  if (name === GET_PASSENGER_RECOVERY_STATE_TOOL) {
+    return getPassengerRecoveryState(String(parsedArguments.flightNumber || ''));
   }
 
   return {

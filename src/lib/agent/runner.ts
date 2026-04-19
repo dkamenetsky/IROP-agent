@@ -68,6 +68,7 @@ You must gather facts with tools before making a recovery recommendation.
 Tool rules:
 - If a flight number is present or can be inferred, call get_flight_state before you answer.
 - After observing the flight, call get_staffing_state for the same flight before you finalize any staffing recommendation or staffing risk.
+- Before you finalize passenger impact or passenger actions, call get_passenger_recovery_state for the same flight.
 - Treat tool output as the authoritative system of record for this prototype.
 - Do not invent live staffing assignments or external system actions that cannot be verified from the available tool data.
 - Do not narrate tool execution history. The server will record actual tool steps separately.
@@ -272,6 +273,20 @@ function getObservedStaffingRecord(incidentState: AgentIncidentState): Record<st
   return Object.keys(staffing).length ? staffing : null;
 }
 
+function getObservedPassengerRecoveryRecord(incidentState: AgentIncidentState): Record<string, unknown> | null {
+  const latestPassengerState = [...incidentState.toolOutputs]
+    .reverse()
+    .find((item) => item.toolName === 'get_passenger_recovery_state');
+
+  if (!latestPassengerState) return null;
+
+  const output = asRecord(latestPassengerState.output);
+  if (output.ok !== true) return null;
+
+  const passengerRecovery = asRecord(output.passengerRecovery);
+  return Object.keys(passengerRecovery).length ? passengerRecovery : null;
+}
+
 function hasObservedTool(incidentState: AgentIncidentState, toolName: string) {
   return incidentState.toolOutputs.some((item) => item.toolName === toolName);
 }
@@ -303,6 +318,64 @@ function deriveStaffingOptionsFromObservedState(staffingRecord: Record<string, u
       } satisfies StaffingOption;
     })
     .filter((item): item is StaffingOption => Boolean(item));
+}
+
+function derivePassengerActionsFromObservedState(passengerRecord: Record<string, unknown> | null): PassengerRecoveryAction[] {
+  if (!passengerRecord) return [];
+
+  const queueStatus = asString(passengerRecord.queueStatus, 'stable');
+  const nextRecommendedMessage = asString(
+    asRecord(passengerRecord.communicationStatus).nextRecommendedMessage,
+    'Provide a clear passenger update.',
+  );
+  const needsManualHandling = typeof asRecord(passengerRecord.reaccommodationStatus).needsManualHandling === 'number'
+    ? (asRecord(passengerRecord.reaccommodationStatus).needsManualHandling as number)
+    : 0;
+  const specialAssistanceCount =
+    typeof passengerRecord.specialAssistanceCount === 'number' ? passengerRecord.specialAssistanceCount : 0;
+  const topConcerns = asArray(passengerRecord.topConcerns).map((item) => asString(item)).filter(Boolean);
+
+  const actions: PassengerRecoveryAction[] = [
+    {
+      title: 'Issue the next passenger update',
+      owner: 'Gate lead',
+      reason: nextRecommendedMessage,
+    },
+  ];
+
+  if (needsManualHandling > 0) {
+    actions.push({
+      title: 'Stage manual reaccommodation support',
+      owner: 'Customer service lead',
+      reason: `${needsManualHandling} passengers currently need manual handling in the mock recovery system.`,
+    });
+  }
+
+  if (queueStatus === 'building' || queueStatus === 'critical') {
+    actions.push({
+      title: 'Add visible queue management near the gate or recovery point',
+      owner: 'Duty manager',
+      reason: `Passenger queue status is ${queueStatus} and top concerns indicate front-line pressure is rising.`,
+    });
+  }
+
+  if (specialAssistanceCount > 0) {
+    actions.push({
+      title: 'Assign focused support for special-assistance and priority passengers',
+      owner: 'Duty manager',
+      reason: `${specialAssistanceCount} special-assistance passengers are flagged in the mock recovery system.`,
+    });
+  }
+
+  if (topConcerns[0]) {
+    actions.push({
+      title: 'Brief front-line staff on the main passenger concern',
+      owner: 'Customer service lead',
+      reason: topConcerns[0],
+    });
+  }
+
+  return actions;
 }
 
 function formatObservedImpactedWindow(
@@ -385,6 +458,21 @@ function summarizeToolExecution(toolName: string, input: Record<string, unknown>
     return `Observed staffing risk ${overallRisk}. ${roleCoverage.join('; ')}.`;
   }
 
+  if (toolName === 'get_passenger_recovery_state') {
+    if (record.ok !== true) {
+      const errorRecord = asRecord(record.error);
+      return asString(errorRecord.message, 'Passenger recovery lookup failed.');
+    }
+
+    const passengerRecovery = asRecord(record.passengerRecovery);
+    const queueStatus = asString(passengerRecovery.queueStatus, 'unknown');
+    const misconnectRisk = asString(passengerRecovery.misconnectRisk, 'unknown');
+    const impactedPassengers =
+      typeof passengerRecovery.impactedPassengers === 'number' ? passengerRecovery.impactedPassengers : 0;
+
+    return `Observed passenger recovery state: ${impactedPassengers} impacted passengers, queue ${queueStatus}, misconnect risk ${misconnectRisk}.`;
+  }
+
   return `${toolName} executed.`;
 }
 
@@ -393,7 +481,9 @@ function normalizeRecoveryPlan(rawPlan: unknown, input: AnalyzeInput, incidentSt
   const observedFlight = getObservedFlightRecord(incidentState);
   const observedDisruption = getObservedPrimaryDisruption(observedFlight);
   const observedStaffing = getObservedStaffingRecord(incidentState);
+  const observedPassengerRecovery = getObservedPassengerRecoveryRecord(incidentState);
   const observedStaffingOptions = deriveStaffingOptionsFromObservedState(observedStaffing);
+  const observedPassengerActions = derivePassengerActionsFromObservedState(observedPassengerRecovery);
 
   const actions = asArray(record.actions)
     .map(normalizeRecoveryAction)
@@ -426,7 +516,12 @@ function normalizeRecoveryPlan(rawPlan: unknown, input: AnalyzeInput, incidentSt
     staffingRisk: observedStaffing ? observedOverallRisk : asRiskLevel(record.staffingRisk, 'medium'),
     passengerImpact: asString(
       record.passengerImpact,
-      asString(observedDisruption?.passengerImpact, 'Passenger impact requires confirmation from additional tools.'),
+      observedPassengerRecovery
+        ? `${typeof observedPassengerRecovery.impactedPassengers === 'number' ? observedPassengerRecovery.impactedPassengers : 'Affected'} passengers are impacted, queue status is ${asString(
+            observedPassengerRecovery.queueStatus,
+            'unknown',
+          )}, and misconnect risk is ${asString(observedPassengerRecovery.misconnectRisk, 'unknown')}.`
+        : asString(observedDisruption?.passengerImpact, 'Passenger impact requires confirmation from additional tools.'),
     ),
     operationalFocus: asString(
       record.operationalFocus,
@@ -436,7 +531,7 @@ function normalizeRecoveryPlan(rawPlan: unknown, input: AnalyzeInput, incidentSt
     actions,
     timeline,
     staffingOptions: observedStaffingOptions.length ? observedStaffingOptions : modelStaffingOptions,
-    passengerActions,
+    passengerActions: observedPassengerActions.length ? observedPassengerActions : passengerActions,
     alternatives: asArray(record.alternatives).map((item) => asString(item)).filter(Boolean),
     steps: incidentState.toolSteps,
     mode: 'openrouter-agent',
@@ -559,6 +654,16 @@ export async function runRecoveryAgent(input: AnalyzeInput, runtimeConfig: Runti
       messages.push({
         role: 'user',
         content: `Before you finalize, call get_staffing_state for ${flightNumber} and then continue with the final JSON response.`,
+      });
+      continue;
+    }
+
+    if (!hasObservedTool(incidentState, 'get_passenger_recovery_state')) {
+      const observedFlight = getObservedFlightRecord(incidentState);
+      const flightNumber = asString(observedFlight?.flightNumber, input.flightNumber || 'the same flight');
+      messages.push({
+        role: 'user',
+        content: `Before you finalize, call get_passenger_recovery_state for ${flightNumber} and then continue with the final JSON response.`,
       });
       continue;
     }
