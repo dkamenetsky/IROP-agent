@@ -66,10 +66,6 @@ interface StaffingCoverageEntry {
   excludedCandidates: string[];
 }
 
-const GET_FLIGHT_STATE_TOOL = 'get_flight_state';
-const GET_STAFFING_STATE_TOOL = 'get_staffing_state';
-const GET_PASSENGER_RECOVERY_STATE_TOOL = 'get_passenger_recovery_state';
-
 interface MockPassengerRecoveryState {
   flightNumber: string;
   totalPassengers: number;
@@ -91,7 +87,27 @@ interface MockPassengerRecoveryState {
   topConcerns: string[];
 }
 
-const MOCK_FLIGHT_STATES: Record<string, MockFlightState> = {
+interface MockActionLogEntry {
+  tool: string;
+  flightNumber: string;
+  status: 'executed';
+  executedAt: string;
+  details: Record<string, unknown>;
+}
+
+export interface MockSystemState {
+  flightStates: Record<string, MockFlightState>;
+  staffRoster: MockStaffRecord[];
+  passengerRecoveryStates: Record<string, MockPassengerRecoveryState>;
+  actionLog: MockActionLogEntry[];
+}
+
+const GET_FLIGHT_STATE_TOOL = 'get_flight_state';
+const GET_STAFFING_STATE_TOOL = 'get_staffing_state';
+const GET_PASSENGER_RECOVERY_STATE_TOOL = 'get_passenger_recovery_state';
+const PUBLISH_PASSENGER_ANNOUNCEMENT_TOOL = 'publish_passenger_announcement';
+
+const BASE_FLIGHT_STATES: Record<string, MockFlightState> = {
   PD218: {
     flightNumber: 'PD218',
     station: 'YTZ',
@@ -184,7 +200,7 @@ const MOCK_FLIGHT_STATES: Record<string, MockFlightState> = {
   },
 };
 
-const MOCK_STAFF_ROSTER: MockStaffRecord[] = [
+const BASE_STAFF_ROSTER: MockStaffRecord[] = [
   {
     id: 's1',
     name: 'Mia Chen',
@@ -283,7 +299,7 @@ const MOCK_STAFF_ROSTER: MockStaffRecord[] = [
   },
 ];
 
-const MOCK_PASSENGER_RECOVERY_STATE: Record<string, MockPassengerRecoveryState> = {
+const BASE_PASSENGER_RECOVERY_STATES: Record<string, MockPassengerRecoveryState> = {
   PD218: {
     flightNumber: 'PD218',
     totalPassengers: 94,
@@ -413,7 +429,47 @@ export const structuredToolDefinitions: StructuredToolDefinition[] = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: PUBLISH_PASSENGER_ANNOUNCEMENT_TOOL,
+      description:
+        'Publish a passenger-facing announcement in the mock recovery system. This is a sandbox execution tool that updates communication state for the flight.',
+      parameters: {
+        type: 'object',
+        properties: {
+          flightNumber: {
+            type: 'string',
+            description: 'The airline flight number, for example PD218.',
+          },
+          messageType: {
+            type: 'string',
+            description: 'A short message category such as delay_update, cancellation_update, or gate_change_update.',
+          },
+          messageBody: {
+            type: 'string',
+            description: 'The concise announcement text to publish to passengers.',
+          },
+        },
+        required: ['flightNumber', 'messageType', 'messageBody'],
+        additionalProperties: false,
+      },
+    },
+  },
 ];
+
+function deepClone<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+export function createMockSystemState(): MockSystemState {
+  return {
+    flightStates: deepClone(BASE_FLIGHT_STATES),
+    staffRoster: deepClone(BASE_STAFF_ROSTER),
+    passengerRecoveryStates: deepClone(BASE_PASSENGER_RECOVERY_STATES),
+    actionLog: [],
+  };
+}
 
 function normalizeFlightNumber(value: unknown): string {
   return typeof value === 'string' ? value.trim().toUpperCase() : '';
@@ -449,9 +505,14 @@ function isNearHourLimit(member: MockStaffRecord) {
   return member.maxHours - member.hoursThisWeek <= 4;
 }
 
-function evaluateRoleCoverage(flightState: MockFlightState, role: StaffRole, required: number): StaffingCoverageEntry {
+function evaluateRoleCoverage(
+  state: MockSystemState,
+  flightState: MockFlightState,
+  role: StaffRole,
+  required: number,
+): StaffingCoverageEntry {
   const coverageWindow = getCoverageWindow(flightState);
-  const scheduled = MOCK_STAFF_ROSTER.filter(
+  const scheduled = state.staffRoster.filter(
     (member) => member.role === role && member.assignedFlights.includes(flightState.flightNumber),
   );
   const candidates: Array<{ member: MockStaffRecord; score: number }> = [];
@@ -460,7 +521,7 @@ function evaluateRoleCoverage(flightState: MockFlightState, role: StaffRole, req
     .filter(isNearHourLimit)
     .map((member) => `${member.name}: within 4 hours of weekly maximum`);
 
-  for (const member of MOCK_STAFF_ROSTER) {
+  for (const member of state.staffRoster) {
     if (member.role !== role) continue;
 
     if (member.assignedFlights.includes(flightState.flightNumber) && !member.onReserve) {
@@ -523,10 +584,10 @@ function evaluateRoleCoverage(flightState: MockFlightState, role: StaffRole, req
   };
 }
 
-function buildStaffingState(flightState: MockFlightState) {
+function buildStaffingState(state: MockSystemState, flightState: MockFlightState) {
   const coverageWindow = getCoverageWindow(flightState);
   const roleCoverage = (Object.entries(flightState.rolesNeeded) as Array<[StaffRole, number]>).map(([role, required]) =>
-    evaluateRoleCoverage(flightState, role, required),
+    evaluateRoleCoverage(state, flightState, role, required),
   );
 
   const overallRisk: RiskLevel = roleCoverage.some((entry) => entry.status === 'gap')
@@ -552,9 +613,9 @@ function buildStaffingState(flightState: MockFlightState) {
   };
 }
 
-export function getFlightState(flightNumber: string) {
+function getFlightState(state: MockSystemState, flightNumber: string) {
   const normalizedFlightNumber = normalizeFlightNumber(flightNumber);
-  const flightState = MOCK_FLIGHT_STATES[normalizedFlightNumber];
+  const flightState = state.flightStates[normalizedFlightNumber];
 
   if (!flightState) {
     return {
@@ -563,7 +624,7 @@ export function getFlightState(flightNumber: string) {
         code: 'FLIGHT_NOT_FOUND',
         message: `Flight ${normalizedFlightNumber || '(empty)'} is not present in the mock operations dataset.`,
       },
-      availableFlights: Object.keys(MOCK_FLIGHT_STATES),
+      availableFlights: Object.keys(state.flightStates),
       sourceSystem: 'mock-flight-ops',
       dataFreshness: 'mock-static',
     };
@@ -574,13 +635,14 @@ export function getFlightState(flightNumber: string) {
     sourceSystem: 'mock-flight-ops',
     dataFreshness: 'mock-static',
     staffingVerification: 'available_via_get_staffing_state',
+    passengerRecoveryVerification: 'available_via_get_passenger_recovery_state',
     flight: flightState,
   };
 }
 
-export function getStaffingState(flightNumber: string) {
+function getStaffingState(state: MockSystemState, flightNumber: string) {
   const normalizedFlightNumber = normalizeFlightNumber(flightNumber);
-  const flightState = MOCK_FLIGHT_STATES[normalizedFlightNumber];
+  const flightState = state.flightStates[normalizedFlightNumber];
 
   if (!flightState) {
     return {
@@ -589,7 +651,7 @@ export function getStaffingState(flightNumber: string) {
         code: 'FLIGHT_NOT_FOUND',
         message: `Flight ${normalizedFlightNumber || '(empty)'} is not present in the mock staffing dataset.`,
       },
-      availableFlights: Object.keys(MOCK_FLIGHT_STATES),
+      availableFlights: Object.keys(state.flightStates),
       sourceSystem: 'mock-staff-ops',
       dataFreshness: 'mock-static',
     };
@@ -600,13 +662,13 @@ export function getStaffingState(flightNumber: string) {
     sourceSystem: 'mock-staff-ops',
     dataFreshness: 'mock-static',
     flightNumber: normalizedFlightNumber,
-    staffing: buildStaffingState(flightState),
+    staffing: buildStaffingState(state, flightState),
   };
 }
 
-export function getPassengerRecoveryState(flightNumber: string) {
+function getPassengerRecoveryState(state: MockSystemState, flightNumber: string) {
   const normalizedFlightNumber = normalizeFlightNumber(flightNumber);
-  const passengerState = MOCK_PASSENGER_RECOVERY_STATE[normalizedFlightNumber];
+  const passengerState = state.passengerRecoveryStates[normalizedFlightNumber];
 
   if (!passengerState) {
     return {
@@ -615,7 +677,7 @@ export function getPassengerRecoveryState(flightNumber: string) {
         code: 'FLIGHT_NOT_FOUND',
         message: `Flight ${normalizedFlightNumber || '(empty)'} is not present in the mock passenger recovery dataset.`,
       },
-      availableFlights: Object.keys(MOCK_PASSENGER_RECOVERY_STATE),
+      availableFlights: Object.keys(state.passengerRecoveryStates),
       sourceSystem: 'mock-passenger-recovery',
       dataFreshness: 'mock-static',
     };
@@ -630,7 +692,68 @@ export function getPassengerRecoveryState(flightNumber: string) {
   };
 }
 
-export function executeStructuredTool(name: string, rawArguments: string): unknown {
+function publishPassengerAnnouncement(
+  state: MockSystemState,
+  flightNumber: string,
+  messageType: string,
+  messageBody: string,
+) {
+  const normalizedFlightNumber = normalizeFlightNumber(flightNumber);
+  const passengerState = state.passengerRecoveryStates[normalizedFlightNumber];
+
+  if (!passengerState) {
+    return {
+      ok: false,
+      error: {
+        code: 'FLIGHT_NOT_FOUND',
+        message: `Flight ${normalizedFlightNumber || '(empty)'} is not present in the mock passenger recovery dataset.`,
+      },
+      availableFlights: Object.keys(state.passengerRecoveryStates),
+      sourceSystem: 'mock-passenger-recovery',
+      dataFreshness: 'mock-static',
+    };
+  }
+
+  const executedAt = new Date().toISOString();
+  passengerState.communicationStatus.lastUpdateSent = executedAt;
+  passengerState.communicationStatus.announcementReady = false;
+  passengerState.communicationStatus.nextRecommendedMessage =
+    'Wait for the next operational change before sending another broad passenger update.';
+  passengerState.topConcerns = passengerState.topConcerns.filter(
+    (concern) => !concern.toLowerCase().includes('revised departure update') && !concern.toLowerCase().includes('repeated direction'),
+  );
+
+  if (passengerState.queueStatus === 'critical') passengerState.queueStatus = 'building';
+  else if (passengerState.queueStatus === 'building') passengerState.queueStatus = 'stable';
+
+  state.actionLog.push({
+    tool: PUBLISH_PASSENGER_ANNOUNCEMENT_TOOL,
+    flightNumber: normalizedFlightNumber,
+    status: 'executed',
+    executedAt,
+    details: {
+      messageType,
+      messageBody,
+    },
+  });
+
+  return {
+    ok: true,
+    sourceSystem: 'mock-passenger-recovery',
+    dataFreshness: 'mock-static-updated',
+    action: {
+      tool: PUBLISH_PASSENGER_ANNOUNCEMENT_TOOL,
+      flightNumber: normalizedFlightNumber,
+      messageType,
+      messageBody,
+      executedAt,
+      result: 'published',
+    },
+    passengerRecovery: passengerState,
+  };
+}
+
+export function executeStructuredTool(state: MockSystemState, name: string, rawArguments: string): unknown {
   let parsedArguments: Record<string, unknown> = {};
 
   try {
@@ -646,15 +769,24 @@ export function executeStructuredTool(name: string, rawArguments: string): unkno
   }
 
   if (name === GET_FLIGHT_STATE_TOOL) {
-    return getFlightState(String(parsedArguments.flightNumber || ''));
+    return getFlightState(state, String(parsedArguments.flightNumber || ''));
   }
 
   if (name === GET_STAFFING_STATE_TOOL) {
-    return getStaffingState(String(parsedArguments.flightNumber || ''));
+    return getStaffingState(state, String(parsedArguments.flightNumber || ''));
   }
 
   if (name === GET_PASSENGER_RECOVERY_STATE_TOOL) {
-    return getPassengerRecoveryState(String(parsedArguments.flightNumber || ''));
+    return getPassengerRecoveryState(state, String(parsedArguments.flightNumber || ''));
+  }
+
+  if (name === PUBLISH_PASSENGER_ANNOUNCEMENT_TOOL) {
+    return publishPassengerAnnouncement(
+      state,
+      String(parsedArguments.flightNumber || ''),
+      String(parsedArguments.messageType || ''),
+      String(parsedArguments.messageBody || ''),
+    );
   }
 
   return {

@@ -1,5 +1,5 @@
 import { runFallbackPlanner } from '@/lib/agent/fallbackPlanner';
-import { executeStructuredTool, structuredToolDefinitions } from '@/lib/agent/structuredTools';
+import { createMockSystemState, executeStructuredTool, structuredToolDefinitions, type MockSystemState } from '@/lib/agent/structuredTools';
 import {
   AnalyzeInput,
   EscalationStep,
@@ -48,6 +48,7 @@ interface OpenRouterResponse {
 
 interface AgentIncidentState {
   input: AnalyzeInput;
+  systemState: MockSystemState;
   toolSteps: ToolStep[];
   toolOutputs: Array<{
     toolCallId: string;
@@ -69,6 +70,8 @@ Tool rules:
 - If a flight number is present or can be inferred, call get_flight_state before you answer.
 - After observing the flight, call get_staffing_state for the same flight before you finalize any staffing recommendation or staffing risk.
 - Before you finalize passenger impact or passenger actions, call get_passenger_recovery_state for the same flight.
+- If passenger recovery says an announcement is ready, use publish_passenger_announcement before you finalize.
+- After publish_passenger_announcement, call get_passenger_recovery_state again so your final answer reflects the updated state.
 - Treat tool output as the authoritative system of record for this prototype.
 - Do not invent live staffing assignments or external system actions that cannot be verified from the available tool data.
 - Do not narrate tool execution history. The server will record actual tool steps separately.
@@ -291,6 +294,22 @@ function hasObservedTool(incidentState: AgentIncidentState, toolName: string) {
   return incidentState.toolOutputs.some((item) => item.toolName === toolName);
 }
 
+function getLastToolIndex(incidentState: AgentIncidentState, toolName: string) {
+  for (let index = incidentState.toolOutputs.length - 1; index >= 0; index -= 1) {
+    if (incidentState.toolOutputs[index]?.toolName === toolName) {
+      return index;
+    }
+  }
+
+  return -1;
+}
+
+function hasToolAfterIndex(incidentState: AgentIncidentState, toolName: string, index: number) {
+  if (index < 0) return false;
+
+  return incidentState.toolOutputs.some((item, itemIndex) => itemIndex > index && item.toolName === toolName);
+}
+
 function deriveStaffingOptionsFromObservedState(staffingRecord: Record<string, unknown> | null): StaffingOption[] {
   if (!staffingRecord) return [];
 
@@ -324,10 +343,9 @@ function derivePassengerActionsFromObservedState(passengerRecord: Record<string,
   if (!passengerRecord) return [];
 
   const queueStatus = asString(passengerRecord.queueStatus, 'stable');
-  const nextRecommendedMessage = asString(
-    asRecord(passengerRecord.communicationStatus).nextRecommendedMessage,
-    'Provide a clear passenger update.',
-  );
+  const communicationStatus = asRecord(passengerRecord.communicationStatus);
+  const nextRecommendedMessage = asString(communicationStatus.nextRecommendedMessage, 'Provide a clear passenger update.');
+  const announcementReady = communicationStatus.announcementReady === true;
   const needsManualHandling = typeof asRecord(passengerRecord.reaccommodationStatus).needsManualHandling === 'number'
     ? (asRecord(passengerRecord.reaccommodationStatus).needsManualHandling as number)
     : 0;
@@ -335,13 +353,15 @@ function derivePassengerActionsFromObservedState(passengerRecord: Record<string,
     typeof passengerRecord.specialAssistanceCount === 'number' ? passengerRecord.specialAssistanceCount : 0;
   const topConcerns = asArray(passengerRecord.topConcerns).map((item) => asString(item)).filter(Boolean);
 
-  const actions: PassengerRecoveryAction[] = [
-    {
+  const actions: PassengerRecoveryAction[] = [];
+
+  if (announcementReady) {
+    actions.push({
       title: 'Issue the next passenger update',
       owner: 'Gate lead',
       reason: nextRecommendedMessage,
-    },
-  ];
+    });
+  }
 
   if (needsManualHandling > 0) {
     actions.push({
@@ -376,6 +396,11 @@ function derivePassengerActionsFromObservedState(passengerRecord: Record<string,
   }
 
   return actions;
+}
+
+function passengerAnnouncementReady(passengerRecord: Record<string, unknown> | null) {
+  const communicationStatus = asRecord(passengerRecord?.communicationStatus);
+  return communicationStatus.announcementReady === true;
 }
 
 function formatObservedImpactedWindow(
@@ -471,6 +496,19 @@ function summarizeToolExecution(toolName: string, input: Record<string, unknown>
       typeof passengerRecovery.impactedPassengers === 'number' ? passengerRecovery.impactedPassengers : 0;
 
     return `Observed passenger recovery state: ${impactedPassengers} impacted passengers, queue ${queueStatus}, misconnect risk ${misconnectRisk}.`;
+  }
+
+  if (toolName === 'publish_passenger_announcement') {
+    if (record.ok !== true) {
+      const errorRecord = asRecord(record.error);
+      return asString(errorRecord.message, 'Passenger announcement execution failed.');
+    }
+
+    const action = asRecord(record.action);
+    return `Executed passenger announcement for ${asString(action.flightNumber, 'unknown flight')} as ${asString(
+      action.messageType,
+      'unspecified message',
+    )}.`;
   }
 
   return `${toolName} executed.`;
@@ -577,6 +615,7 @@ export async function runRecoveryAgent(input: AnalyzeInput, runtimeConfig: Runti
 
   const incidentState: AgentIncidentState = {
     input: { ...input },
+    systemState: createMockSystemState(),
     toolSteps: [],
     toolOutputs: [],
   };
@@ -611,7 +650,7 @@ export async function runRecoveryAgent(input: AnalyzeInput, runtimeConfig: Runti
           parsedInput = { rawArguments: toolCall.function.arguments };
         }
 
-        const result = executeStructuredTool(toolCall.function.name, toolCall.function.arguments);
+        const result = executeStructuredTool(incidentState.systemState, toolCall.function.name, toolCall.function.arguments);
 
         incidentState.toolOutputs.push({
           toolCallId: toolCall.id,
@@ -664,6 +703,30 @@ export async function runRecoveryAgent(input: AnalyzeInput, runtimeConfig: Runti
       messages.push({
         role: 'user',
         content: `Before you finalize, call get_passenger_recovery_state for ${flightNumber} and then continue with the final JSON response.`,
+      });
+      continue;
+    }
+
+    const observedPassengerRecovery = getObservedPassengerRecoveryRecord(incidentState);
+    const lastPassengerObservationIndex = getLastToolIndex(incidentState, 'get_passenger_recovery_state');
+    const lastAnnouncementActionIndex = getLastToolIndex(incidentState, 'publish_passenger_announcement');
+
+    if (passengerAnnouncementReady(observedPassengerRecovery) && lastAnnouncementActionIndex < lastPassengerObservationIndex) {
+      const observedFlight = getObservedFlightRecord(incidentState);
+      const flightNumber = asString(observedFlight?.flightNumber, input.flightNumber || 'the same flight');
+      messages.push({
+        role: 'user',
+        content: `Before you finalize, call publish_passenger_announcement for ${flightNumber} using the recommended passenger update, then continue.`,
+      });
+      continue;
+    }
+
+    if (lastAnnouncementActionIndex >= 0 && !hasToolAfterIndex(incidentState, 'get_passenger_recovery_state', lastAnnouncementActionIndex)) {
+      const observedFlight = getObservedFlightRecord(incidentState);
+      const flightNumber = asString(observedFlight?.flightNumber, input.flightNumber || 'the same flight');
+      messages.push({
+        role: 'user',
+        content: `You executed publish_passenger_announcement for ${flightNumber}. Call get_passenger_recovery_state again before finalizing so your answer reflects the updated state.`,
       });
       continue;
     }

@@ -21,11 +21,12 @@ OpenRouter is used for:
 - deciding what tool to call next,
 - reading structured mock system responses,
 - synthesizing those observations into a recovery plan,
-- later proposing actions and replanning after state changes.
+- choosing bounded mock actions,
+- replanning after state changes.
 
 In simple terms:
 
-- mock tools simulate the airline systems,
+- mock tools simulate airline systems,
 - OpenRouter decides how to use them,
 - the app orchestrates the loop and records what actually happened.
 
@@ -35,7 +36,7 @@ In simple terms:
 2. `runRecoveryAgent` remains the orchestration loop.
 3. The model only sees structured tool interfaces, never raw app internals.
 4. Mock data stays embedded inside tools so the model experiences them like live internal systems.
-5. The server owns incident state, tool traces, and later mock action results.
+5. The server owns incident state, tool traces, and mock action results.
 6. The old fallback planner remains available as a safety net while the agent path expands.
 
 ## Current State
@@ -44,22 +45,28 @@ Implemented now:
 
 - `get_flight_state(flightNumber)`
 - `get_staffing_state(flightNumber)`
+- `get_passenger_recovery_state(flightNumber)`
+- `publish_passenger_announcement(flightNumber, messageType, messageBody)`
 - OpenRouter tool-calling loop
 - server-owned tool trace
-- grounded staffing risk and staffing options
+- grounded staffing risk, staffing options, and passenger pressure
+- mock state-changing execution with re-observation
 
 Current demo story:
 
 - operator selects a disruption,
 - the agent checks the mock flight system,
 - the agent checks the mock staffing system,
-- the agent produces a recovery plan from observed state.
+- the agent checks the mock passenger recovery system,
+- the agent can publish a mock passenger announcement,
+- the agent re-checks passenger state,
+- the agent produces a recovery plan from the updated observed state.
 
 ## Demo Roadmap
 
 ### Stage 1: Multi-System Observation
 
-Status: in progress
+Status: implemented
 
 Objective:
 
@@ -77,51 +84,36 @@ Expected demo behavior:
 - passenger impact becomes grounded, not generic
 - recommendations become more believable for a duty manager
 
-### Stage 2: Draft Actions
+### Stage 2: First Mock Action
+
+Status: implemented
 
 Objective:
 
-- move from “AI planner” toward “AI agent”
+- move from "AI planner" toward "AI agent"
 
-Planned tools:
+Implemented now:
 
-- `draft_passenger_announcement`
-- `draft_station_briefing`
-- `draft_escalation_message`
+- `publish_passenger_announcement`
 
 Expected demo behavior:
 
 - the agent does not only analyze
-- it creates usable outputs that a manager could approve
-
-### Stage 3: Mock Execution
-
-Objective:
-
-- let the agent act inside the sandbox
-
-Planned tools:
-
-- `publish_passenger_announcement`
-- `open_rebooking_support`
-- `request_reserve_staff`
-
-Expected demo behavior:
-
-- the agent proposes an action
-- the user approves it
+- it can execute one bounded mock action
 - the mock system state changes
 
-### Stage 4: Replanning Loop
+### Stage 3: Replanning Loop
+
+Status: implemented for passenger announcements
 
 Objective:
 
 - show adaptive agent behavior instead of one-shot generation
 
-Planned behavior:
+Implemented behavior:
 
-- after a mock action, the agent re-checks tools
-- the plan updates based on the new state
+- after `publish_passenger_announcement`, the agent re-checks `get_passenger_recovery_state`
+- the final plan reflects the updated passenger system state
 
 Expected demo behavior:
 
@@ -130,6 +122,24 @@ Expected demo behavior:
 - act
 - observe again
 - revise the plan
+
+### Stage 4: More Action Tools
+
+Objective:
+
+- widen the set of mock actions the agent can take
+
+Planned tools:
+
+- `open_rebooking_support`
+- `request_reserve_staff`
+- `draft_station_briefing`
+- `draft_escalation_message`
+
+Expected demo behavior:
+
+- the agent can take more than one kind of action
+- the agent starts looking like a usable operations assistant
 
 ### Stage 5: Broader Operational Context
 
@@ -156,7 +166,7 @@ Expected demo behavior:
 
 ## Important Clarification
 
-The agent does not need to “learn” in the retraining sense to be agentic.
+The agent does not need to "learn" in the retraining sense to be agentic.
 
 For this demo, agentic behavior means:
 
