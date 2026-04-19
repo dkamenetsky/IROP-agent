@@ -60,7 +60,7 @@ interface AgentIncidentState {
 
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const DEFAULT_OPENROUTER_MODEL = 'openai/gpt-4o-mini';
-const MAX_TOOL_ITERATIONS = 12;
+const MAX_TOOL_ITERATIONS = 20;
 const STAFF_ROLES: StaffRole[] = ['Gate', 'Ramp', 'Customer Service', 'Operations'];
 
 const SYSTEM_PROMPT = `You are an airline IROP recovery agent operating in a hackathon sandbox.
@@ -613,6 +613,33 @@ function normalizeRecoveryPlan(rawPlan: unknown, input: AnalyzeInput, incidentSt
   };
 }
 
+async function buildFallbackPlanWithAgentTrace(
+  input: AnalyzeInput,
+  runtimeConfig: RuntimeConfig,
+  incidentState: AgentIncidentState,
+  reason: string,
+): Promise<RecoveryPlan> {
+  const fallbackPlan = await runFallbackPlanner(input, runtimeConfig);
+
+  const agentSteps: ToolStep[] = [
+    ...incidentState.toolSteps,
+    {
+      tool: 'agent_fallback',
+      input: {
+        reason,
+        attemptedToolCalls: incidentState.toolSteps.length,
+      },
+      outputSummary: `OpenRouter was attempted but the agent loop did not finish cleanly. The backup planner completed the response instead. Reason: ${reason}.`,
+    },
+  ];
+
+  return {
+    ...fallbackPlan,
+    summary: `${fallbackPlan.summary} The AI agent path was attempted first, then handed off to the backup planner.`,
+    steps: agentSteps.length ? agentSteps : fallbackPlan.steps,
+  };
+}
+
 async function createOpenRouterCompletion(messages: OpenRouterMessage[]): Promise<OpenRouterResponse> {
   const apiKey = process.env.OPENROUTER_API_KEY;
 
@@ -795,5 +822,10 @@ export async function runRecoveryAgent(input: AnalyzeInput, runtimeConfig: Runti
     return normalizeRecoveryPlan(extractJsonObject(finalContent), input, incidentState);
   }
 
-  return runFallbackPlanner(input, runtimeConfig);
+  return buildFallbackPlanWithAgentTrace(
+    input,
+    runtimeConfig,
+    incidentState,
+    `Reached the maximum tool-iteration budget of ${MAX_TOOL_ITERATIONS}.`,
+  );
 }
