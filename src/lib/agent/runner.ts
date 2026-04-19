@@ -60,7 +60,7 @@ interface AgentIncidentState {
 
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const DEFAULT_OPENROUTER_MODEL = 'openai/gpt-4o-mini';
-const MAX_TOOL_ITERATIONS = 6;
+const MAX_TOOL_ITERATIONS = 12;
 const STAFF_ROLES: StaffRole[] = ['Gate', 'Ramp', 'Customer Service', 'Operations'];
 
 const SYSTEM_PROMPT = `You are an airline IROP recovery agent operating in a hackathon sandbox.
@@ -69,6 +69,8 @@ You must gather facts with tools before making a recovery recommendation.
 Tool rules:
 - If a flight number is present or can be inferred, call get_flight_state before you answer.
 - After observing the flight, call get_staffing_state for the same flight before you finalize any staffing recommendation or staffing risk.
+- If staffing shows a watch or gap and a reserve option is available, use request_reserve_staff once before you finalize.
+- After request_reserve_staff, call get_staffing_state again so your final answer reflects the updated state.
 - Before you finalize passenger impact or passenger actions, call get_passenger_recovery_state for the same flight.
 - If passenger recovery says an announcement is ready, use publish_passenger_announcement before you finalize.
 - After publish_passenger_announcement, call get_passenger_recovery_state again so your final answer reflects the updated state.
@@ -339,6 +341,28 @@ function deriveStaffingOptionsFromObservedState(staffingRecord: Record<string, u
     .filter((item): item is StaffingOption => Boolean(item));
 }
 
+function getReserveStaffActionCandidate(staffingRecord: Record<string, unknown> | null) {
+  if (!staffingRecord) return null;
+
+  for (const entry of asArray(staffingRecord.roleCoverage).map(asRecord)) {
+    const role = asString(entry.role) as StaffRole;
+    const status = asString(entry.status);
+    const recommendedStaff = asString(entry.recommendedStaff);
+
+    if (!STAFF_ROLES.includes(role)) continue;
+    if (!recommendedStaff) continue;
+    if (status !== 'watch' && status !== 'gap') continue;
+
+    return {
+      role,
+      staffName: recommendedStaff,
+      status,
+    };
+  }
+
+  return null;
+}
+
 function derivePassengerActionsFromObservedState(passengerRecord: Record<string, unknown> | null): PassengerRecoveryAction[] {
   if (!passengerRecord) return [];
 
@@ -508,6 +532,19 @@ function summarizeToolExecution(toolName: string, input: Record<string, unknown>
     return `Executed passenger announcement for ${asString(action.flightNumber, 'unknown flight')} as ${asString(
       action.messageType,
       'unspecified message',
+    )}.`;
+  }
+
+  if (toolName === 'request_reserve_staff') {
+    if (record.ok !== true) {
+      const errorRecord = asRecord(record.error);
+      return asString(errorRecord.message, 'Reserve staffing action failed.');
+    }
+
+    const action = asRecord(record.action);
+    return `Assigned reserve ${asString(action.role, 'staff')} support: ${asString(action.staffName, 'unknown staff')} to ${asString(
+      action.flightNumber,
+      'unknown flight',
     )}.`;
   }
 
@@ -693,6 +730,30 @@ export async function runRecoveryAgent(input: AnalyzeInput, runtimeConfig: Runti
       messages.push({
         role: 'user',
         content: `Before you finalize, call get_staffing_state for ${flightNumber} and then continue with the final JSON response.`,
+      });
+      continue;
+    }
+
+    const observedStaffing = getObservedStaffingRecord(incidentState);
+    const reserveStaffCandidate = getReserveStaffActionCandidate(observedStaffing);
+    const lastReserveStaffActionIndex = getLastToolIndex(incidentState, 'request_reserve_staff');
+
+    if (reserveStaffCandidate && lastReserveStaffActionIndex < 0) {
+      const observedFlight = getObservedFlightRecord(incidentState);
+      const flightNumber = asString(observedFlight?.flightNumber, input.flightNumber || 'the same flight');
+      messages.push({
+        role: 'user',
+        content: `Before you finalize, call request_reserve_staff for ${flightNumber} using role ${reserveStaffCandidate.role} and staffName ${reserveStaffCandidate.staffName}, then continue.`,
+      });
+      continue;
+    }
+
+    if (lastReserveStaffActionIndex >= 0 && !hasToolAfterIndex(incidentState, 'get_staffing_state', lastReserveStaffActionIndex)) {
+      const observedFlight = getObservedFlightRecord(incidentState);
+      const flightNumber = asString(observedFlight?.flightNumber, input.flightNumber || 'the same flight');
+      messages.push({
+        role: 'user',
+        content: `You executed request_reserve_staff for ${flightNumber}. Call get_staffing_state again before finalizing so your answer reflects the updated staffing state.`,
       });
       continue;
     }

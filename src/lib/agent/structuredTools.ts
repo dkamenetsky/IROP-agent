@@ -106,6 +106,7 @@ const GET_FLIGHT_STATE_TOOL = 'get_flight_state';
 const GET_STAFFING_STATE_TOOL = 'get_staffing_state';
 const GET_PASSENGER_RECOVERY_STATE_TOOL = 'get_passenger_recovery_state';
 const PUBLISH_PASSENGER_ANNOUNCEMENT_TOOL = 'publish_passenger_announcement';
+const REQUEST_RESERVE_STAFF_TOOL = 'request_reserve_staff';
 
 const BASE_FLIGHT_STATES: Record<string, MockFlightState> = {
   PD218: {
@@ -456,6 +457,33 @@ export const structuredToolDefinitions: StructuredToolDefinition[] = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: REQUEST_RESERVE_STAFF_TOOL,
+      description:
+        'Assign one reserve staff member to support a disrupted flight in the mock staffing system. This is a sandbox execution tool that updates staffing state for the flight.',
+      parameters: {
+        type: 'object',
+        properties: {
+          flightNumber: {
+            type: 'string',
+            description: 'The airline flight number, for example PD218.',
+          },
+          role: {
+            type: 'string',
+            description: 'The role to reinforce, for example Gate or Ramp.',
+          },
+          staffName: {
+            type: 'string',
+            description: 'The reserve staff member to assign.',
+          },
+        },
+        required: ['flightNumber', 'role', 'staffName'],
+        additionalProperties: false,
+      },
+    },
+  },
 ];
 
 function deepClone<T>(value: T): T {
@@ -753,6 +781,114 @@ function publishPassengerAnnouncement(
   };
 }
 
+function requestReserveStaff(
+  state: MockSystemState,
+  flightNumber: string,
+  role: string,
+  staffName: string,
+) {
+  const normalizedFlightNumber = normalizeFlightNumber(flightNumber);
+  const normalizedRole = role.trim() as StaffRole;
+  const normalizedStaffName = staffName.trim().toLowerCase();
+  const flightState = state.flightStates[normalizedFlightNumber];
+
+  if (!flightState) {
+    return {
+      ok: false,
+      error: {
+        code: 'FLIGHT_NOT_FOUND',
+        message: `Flight ${normalizedFlightNumber || '(empty)'} is not present in the mock staffing dataset.`,
+      },
+      availableFlights: Object.keys(state.flightStates),
+      sourceSystem: 'mock-staff-ops',
+      dataFreshness: 'mock-static',
+    };
+  }
+
+  if (!['Gate', 'Ramp', 'Customer Service', 'Operations'].includes(normalizedRole)) {
+    return {
+      ok: false,
+      error: {
+        code: 'INVALID_ROLE',
+        message: `Role ${role || '(empty)'} is not supported by the mock staffing tool.`,
+      },
+      sourceSystem: 'mock-staff-ops',
+      dataFreshness: 'mock-static',
+    };
+  }
+
+  const staffMember = state.staffRoster.find((member) => member.name.toLowerCase() === normalizedStaffName);
+
+  if (!staffMember) {
+    return {
+      ok: false,
+      error: {
+        code: 'STAFF_NOT_FOUND',
+        message: `Staff member ${staffName || '(empty)'} is not present in the mock staffing dataset.`,
+      },
+      sourceSystem: 'mock-staff-ops',
+      dataFreshness: 'mock-static',
+    };
+  }
+
+  if (staffMember.role !== normalizedRole) {
+    return {
+      ok: false,
+      error: {
+        code: 'ROLE_MISMATCH',
+        message: `${staffMember.name} is a ${staffMember.role}, not a ${normalizedRole}.`,
+      },
+      sourceSystem: 'mock-staff-ops',
+      dataFreshness: 'mock-static',
+    };
+  }
+
+  if (!staffMember.onReserve) {
+    return {
+      ok: false,
+      error: {
+        code: 'NOT_ON_RESERVE',
+        message: `${staffMember.name} is not currently marked as reserve in the mock staffing system.`,
+      },
+      sourceSystem: 'mock-staff-ops',
+      dataFreshness: 'mock-static',
+    };
+  }
+
+  const executedAt = new Date().toISOString();
+
+  if (!staffMember.assignedFlights.includes(normalizedFlightNumber)) {
+    staffMember.assignedFlights.push(normalizedFlightNumber);
+  }
+  staffMember.onReserve = false;
+
+  state.actionLog.push({
+    tool: REQUEST_RESERVE_STAFF_TOOL,
+    flightNumber: normalizedFlightNumber,
+    status: 'executed',
+    executedAt,
+    details: {
+      role: normalizedRole,
+      staffName: staffMember.name,
+    },
+  });
+
+  return {
+    ok: true,
+    sourceSystem: 'mock-staff-ops',
+    dataFreshness: 'mock-static-updated',
+    action: {
+      tool: REQUEST_RESERVE_STAFF_TOOL,
+      flightNumber: normalizedFlightNumber,
+      role: normalizedRole,
+      staffName: staffMember.name,
+      executedAt,
+      result: 'assigned',
+    },
+    staffing: buildStaffingState(state, flightState),
+  };
+}
+
 export function executeStructuredTool(state: MockSystemState, name: string, rawArguments: string): unknown {
   let parsedArguments: Record<string, unknown> = {};
 
@@ -786,6 +922,15 @@ export function executeStructuredTool(state: MockSystemState, name: string, rawA
       String(parsedArguments.flightNumber || ''),
       String(parsedArguments.messageType || ''),
       String(parsedArguments.messageBody || ''),
+    );
+  }
+
+  if (name === REQUEST_RESERVE_STAFF_TOOL) {
+    return requestReserveStaff(
+      state,
+      String(parsedArguments.flightNumber || ''),
+      String(parsedArguments.role || ''),
+      String(parsedArguments.staffName || ''),
     );
   }
 

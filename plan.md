@@ -47,6 +47,7 @@ Implemented now:
 - `get_staffing_state(flightNumber)`
 - `get_passenger_recovery_state(flightNumber)`
 - `publish_passenger_announcement(flightNumber, messageType, messageBody)`
+- `request_reserve_staff(flightNumber, role, staffName)`
 - OpenRouter tool-calling loop
 - server-owned tool trace
 - grounded staffing risk, staffing options, and passenger pressure
@@ -59,6 +60,8 @@ Current demo story:
 - the agent checks the mock staffing system,
 - the agent checks the mock passenger recovery system,
 - the agent can publish a mock passenger announcement,
+- the agent can assign reserve staff in the mock staffing system,
+- the agent re-checks staffing after reserve assignment,
 - the agent re-checks passenger state,
 - the agent produces a recovery plan from the updated observed state.
 
@@ -125,14 +128,19 @@ Expected demo behavior:
 
 ### Stage 4: More Action Tools
 
+Status: partly implemented
+
 Objective:
 
 - widen the set of mock actions the agent can take
 
-Planned tools:
+Implemented now:
+
+- `request_reserve_staff`
+
+Still planned:
 
 - `open_rebooking_support`
-- `request_reserve_staff`
 - `draft_station_briefing`
 - `draft_escalation_message`
 
