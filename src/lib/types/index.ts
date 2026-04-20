@@ -137,4 +137,5 @@ export interface RecoveryPlan {
   steps: ToolStep[];
   mode: RecoveryMode;
   incidentContext?: IncidentContext;
+  durationMs?: number;
 }

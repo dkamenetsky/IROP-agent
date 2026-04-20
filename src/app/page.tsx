@@ -21,6 +21,13 @@ const followUpPrompts = [
   'What is the biggest risk right now?',
 ];
 
+const loadingStages = [
+  'Checking flight status',
+  'Checking staffing coverage',
+  'Checking passenger impact',
+  'Building the final plan',
+];
+
 function tone(level: 'low' | 'medium' | 'high') {
   if (level === 'high') return 'border-rose-700/50 bg-rose-950/50 text-rose-200';
   if (level === 'medium') return 'border-amber-700/50 bg-amber-950/50 text-amber-200';
@@ -89,16 +96,23 @@ function stepStatusLabel(status?: RecoveryPlan['steps'][number]['status']) {
   return 'Info';
 }
 
+function formatDuration(durationMs?: number) {
+  if (typeof durationMs !== 'number' || !Number.isFinite(durationMs)) return null;
+  return `${(durationMs / 1000).toFixed(durationMs >= 10_000 ? 0 : 1)}s`;
+}
+
 export default function HomePage() {
   const [runtimeConfig, setRuntimeConfig] = useState<RuntimeConfig>(cloneRuntimeConfig(defaultRuntimeConfig));
   const [input, setInput] = useState<AnalyzeInput>(defaultInput);
   const [result, setResult] = useState<RecoveryPlan | null>(null);
   const [loading, setLoading] = useState(false);
+  const [loadingElapsedMs, setLoadingElapsedMs] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [followUpQuestion, setFollowUpQuestion] = useState('');
   const [followUpAnswer, setFollowUpAnswer] = useState<string | null>(null);
   const [followUpLoading, setFollowUpLoading] = useState(false);
   const [followUpError, setFollowUpError] = useState<string | null>(null);
+  const loadingStageIndex = Math.min(Math.floor(loadingElapsedMs / 2500), loadingStages.length - 1);
 
   useEffect(() => {
     const config = readBrowserRuntimeConfig();
@@ -109,6 +123,22 @@ export default function HomePage() {
     }));
   }, []);
 
+  useEffect(() => {
+    if (!loading) {
+      setLoadingElapsedMs(0);
+      return;
+    }
+
+    const startedAt = Date.now();
+    setLoadingElapsedMs(0);
+
+    const interval = window.setInterval(() => {
+      setLoadingElapsedMs(Date.now() - startedAt);
+    }, 250);
+
+    return () => window.clearInterval(interval);
+  }, [loading]);
+
   function clearFollowUp() {
     setFollowUpQuestion('');
     setFollowUpAnswer(null);
@@ -118,7 +148,9 @@ export default function HomePage() {
 
   async function analyze(payload: AnalyzeInput = input) {
     setLoading(true);
+    setLoadingElapsedMs(0);
     setError(null);
+    setResult(null);
     clearFollowUp();
 
     try {
@@ -277,6 +309,7 @@ export default function HomePage() {
                     disruptionTypeId: runtimeConfig.disruptionTypes[0]?.id || 'delay',
                   });
                   setResult(null);
+                  setLoadingElapsedMs(0);
                   setError(null);
                   clearFollowUp();
                 }}
@@ -302,12 +335,55 @@ export default function HomePage() {
               <div className="mt-1 text-sm text-slate-400">The AI checks mock flight, staffing, and passenger systems before it answers.</div>
               <div className="mt-1 text-xs text-slate-500">Read top to bottom: what happened, what to do first, team actions, then how the AI worked.</div>
             </div>
-            {result ? (
-              <span className="rounded-full border border-slate-700 px-3 py-1 text-xs text-slate-300">{modeLabel(result.mode)}</span>
-            ) : null}
+            <div className="flex items-center gap-2">
+              {result ? (
+                <span className="rounded-full border border-slate-700 px-3 py-1 text-xs text-slate-300">{modeLabel(result.mode)}</span>
+              ) : null}
+              {result?.durationMs ? (
+                <span className="rounded-full border border-slate-700 px-3 py-1 text-xs text-slate-400">Built in {formatDuration(result.durationMs)}</span>
+              ) : null}
+            </div>
           </div>
 
-          {!result ? (
+          {loading ? (
+            <div className="mt-8 rounded-3xl border border-slate-800 bg-slate-950/70 p-6">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-sm font-semibold text-slate-100">AI is working</div>
+                  <div className="mt-1 text-sm text-slate-400">Typical live wait is about 5 to 12 seconds.</div>
+                </div>
+                <div className="rounded-full border border-sky-800/60 bg-sky-950/40 px-3 py-1 text-xs text-sky-200">
+                  {formatDuration(loadingElapsedMs) || '0.0s'}
+                </div>
+              </div>
+              <div className="mt-5 space-y-3">
+                {loadingStages.map((stage, index) => {
+                  const isActive = index === loadingStageIndex;
+                  const isDone = index < loadingStageIndex;
+
+                  return (
+                    <div
+                      key={stage}
+                      className={`rounded-2xl border px-4 py-3 text-sm ${
+                        isActive
+                          ? 'border-sky-800/60 bg-sky-950/30 text-sky-100'
+                          : isDone
+                            ? 'border-emerald-900/60 bg-emerald-950/20 text-emerald-100'
+                            : 'border-slate-800 bg-slate-900 text-slate-400'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <span>{stage}</span>
+                        <span className="text-xs">
+                          {isDone ? 'Done' : isActive ? 'In progress' : 'Waiting'}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ) : !result ? (
             <div className="mt-8 rounded-3xl border border-dashed border-slate-700 bg-slate-950/60 p-8 text-sm text-slate-400">
               Run a scenario to see the summary, best next step, team actions, staff coverage, passenger support, and the AI tool trace.
             </div>

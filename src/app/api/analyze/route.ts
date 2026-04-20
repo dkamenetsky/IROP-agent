@@ -16,6 +16,7 @@ function normalizeInput(value: unknown): AnalyzeInput {
 
 export async function POST(req: NextRequest) {
   try {
+    const startedAt = Date.now();
     const body = await req.json();
     const input = normalizeInput(body.input ?? { message: body.message });
     const runtimeConfig = normalizeRuntimeConfig(body.runtimeConfig);
@@ -28,7 +29,10 @@ export async function POST(req: NextRequest) {
     }
 
     const result = await runRecoveryAgent(input, runtimeConfig);
-    return NextResponse.json(result);
+    return NextResponse.json({
+      ...result,
+      durationMs: Date.now() - startedAt,
+    });
   } catch (error) {
     const detail = error instanceof Error ? error.message : 'Unknown error';
     return NextResponse.json({ error: detail }, { status: 500 });

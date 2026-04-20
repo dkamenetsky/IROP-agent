@@ -27,7 +27,7 @@ interface AgentIncidentState {
   }>;
 }
 
-const MAX_TOOL_ITERATIONS = 24;
+const MAX_TOOL_ITERATIONS = 18;
 const STAFF_ROLES: StaffRole[] = ['Gate', 'Ramp', 'Customer Service', 'Operations'];
 
 const SYSTEM_PROMPT = `You are an airline IROP recovery agent operating in a hackathon sandbox.
