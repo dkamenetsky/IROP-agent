@@ -1,7 +1,7 @@
 import { RuntimeConfig, DisruptionTypeDefinition, ScenarioDefinition, RecoveryAction, PassengerRecoveryAction, EscalationStep, RiskLevel } from '@/lib/types';
 
-export const RUNTIME_CONFIG_STORAGE_KEY = 'irop-runtime-config-v1';
-const CONFIG_VERSION = 1;
+export const RUNTIME_CONFIG_STORAGE_KEY = 'irop-runtime-config-v2';
+const CONFIG_VERSION = 2;
 
 function cloneAction(action: RecoveryAction): RecoveryAction {
   return {
@@ -566,7 +566,11 @@ export function readBrowserRuntimeConfig(): RuntimeConfig {
   try {
     const raw = window.localStorage.getItem(RUNTIME_CONFIG_STORAGE_KEY);
     if (!raw) return cloneRuntimeConfig(defaultRuntimeConfig);
-    return normalizeRuntimeConfig(JSON.parse(raw));
+    const parsed = normalizeRuntimeConfig(JSON.parse(raw));
+    if (parsed.version !== defaultRuntimeConfig.version) {
+      return cloneRuntimeConfig(defaultRuntimeConfig);
+    }
+    return parsed;
   } catch {
     return cloneRuntimeConfig(defaultRuntimeConfig);
   }
