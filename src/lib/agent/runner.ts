@@ -228,6 +228,9 @@ function normalizeStaffingOption(value: unknown): StaffingOption | null {
     required: typeof record.required === 'number' && Number.isFinite(record.required) ? record.required : 0,
     status,
     recommendedStaff: typeof record.recommendedStaff === 'string' ? record.recommendedStaff : null,
+    scheduledCount: typeof record.scheduledCount === 'number' && Number.isFinite(record.scheduledCount) ? record.scheduledCount : undefined,
+    reserveAvailable: typeof record.reserveAvailable === 'number' && Number.isFinite(record.reserveAvailable) ? record.reserveAvailable : undefined,
+    shortfall: typeof record.shortfall === 'number' && Number.isFinite(record.shortfall) ? record.shortfall : undefined,
     backups: asArray(record.backups).map((item) => asString(item)).filter(Boolean),
     reason: simplifyPlainLanguage(asString(record.reason, 'Staffing verification is not available in this iteration.')),
     excludedCandidates: asArray(record.excludedCandidates).map((item) => asString(item)).filter(Boolean),
@@ -353,11 +356,10 @@ function getLastToolIndex(incidentState: AgentIncidentState, toolName: string) {
 function deriveStaffingOptionsFromObservedState(staffingRecord: Record<string, unknown> | null): StaffingOption[] {
   if (!staffingRecord) return [];
 
-  return asArray(staffingRecord.roleCoverage)
-    .map(asRecord)
-    .map((entry) => {
+  return asArray(staffingRecord.roleCoverage).reduce<StaffingOption[]>((options, item) => {
+    const entry = asRecord(item);
       const role = asString(entry.role) as StaffRole;
-      if (!STAFF_ROLES.includes(role)) return null;
+      if (!STAFF_ROLES.includes(role)) return options;
 
       const statusValue = asString(entry.status);
       const status: StaffingOption['status'] =
@@ -366,17 +368,24 @@ function deriveStaffingOptionsFromObservedState(staffingRecord: Record<string, u
       const complianceRisks = asArray(entry.complianceRisks).map((item) => asString(item)).filter(Boolean);
       const baseReason = simplifyPlainLanguage(asString(entry.reason, 'Observed staffing state is available.'));
 
-      return {
+      options.push({
         role,
         required: typeof entry.required === 'number' && Number.isFinite(entry.required) ? entry.required : 0,
         status,
         recommendedStaff: typeof entry.recommendedStaff === 'string' ? entry.recommendedStaff : null,
+        scheduledCount: typeof entry.scheduled === 'number' && Number.isFinite(entry.scheduled) ? entry.scheduled : undefined,
+        reserveAvailable: typeof entry.reserveAvailable === 'number' && Number.isFinite(entry.reserveAvailable) ? entry.reserveAvailable : undefined,
+        shortfall:
+          typeof entry.required === 'number' && typeof entry.scheduled === 'number' && Number.isFinite(entry.required) && Number.isFinite(entry.scheduled)
+            ? Math.max(entry.required - entry.scheduled, 0)
+            : undefined,
         backups: asArray(entry.backups).map((item) => asString(item)).filter(Boolean),
         reason: complianceRisks.length ? `${baseReason} Compliance warning: ${complianceRisks.join('; ')}.` : baseReason,
         excludedCandidates: asArray(entry.excludedCandidates).map((item) => asString(item)).filter(Boolean),
-      } satisfies StaffingOption;
-    })
-    .filter((item): item is StaffingOption => Boolean(item));
+      } satisfies StaffingOption);
+
+      return options;
+    }, []);
 }
 
 function getReserveStaffActionCandidate(staffingRecord: Record<string, unknown> | null) {
@@ -580,6 +589,51 @@ function displayStaffingStatus(status: string) {
   return status;
 }
 
+function getExecutedTools(incidentState: AgentIncidentState) {
+  return new Set(
+    incidentState.systemState.actionLog
+      .map((entry) => asString(entry.tool))
+      .filter(Boolean),
+  );
+}
+
+function textMatchesCompletedAction(text: string, executedTools: Set<string>) {
+  const normalized = text.toLowerCase();
+
+  if (
+    executedTools.has('publish_passenger_announcement') &&
+    (normalized.includes('announcement') ||
+      normalized.includes('inform passengers') ||
+      normalized.includes('passenger update') ||
+      normalized.includes('publish') ||
+      normalized.includes('tell passengers'))
+  ) {
+    return true;
+  }
+
+  if (
+    executedTools.has('open_rebooking_support') &&
+    (normalized.includes('open rebooking support') ||
+      normalized.includes('rebooking support') ||
+      normalized.includes('recovery desk') ||
+      normalized.includes('service desk for rebooking'))
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+function actionLooksCompleted(action: RecoveryAction | PassengerRecoveryAction, executedTools: Set<string>) {
+  const text = [action.title, action.reason].join(' ');
+  return textMatchesCompletedAction(text, executedTools);
+}
+
+function timelineLooksCompleted(step: EscalationStep, executedTools: Set<string>) {
+  const text = [step.phase, step.trigger, step.action].join(' ');
+  return textMatchesCompletedAction(text, executedTools);
+}
+
 function summarizeToolExecution(toolName: string, input: Record<string, unknown>, output: unknown): string {
   const record = asRecord(output);
 
@@ -705,20 +759,27 @@ function normalizeRecoveryPlan(rawPlan: unknown, input: AnalyzeInput, incidentSt
   const observedPassengerRecovery = getObservedPassengerRecoveryRecord(incidentState);
   const observedStaffingOptions = deriveStaffingOptionsFromObservedState(observedStaffing);
   const observedPassengerActions = derivePassengerActionsFromObservedState(observedPassengerRecovery);
+  const executedTools = getExecutedTools(incidentState);
 
   const actions = asArray(record.actions)
     .map(normalizeRecoveryAction)
-    .filter((item): item is RecoveryAction => Boolean(item));
+    .filter((item): item is RecoveryAction => Boolean(item))
+    .filter((item) => !actionLooksCompleted(item, executedTools));
   const passengerActions = asArray(record.passengerActions)
     .map(normalizePassengerAction)
-    .filter((item): item is PassengerRecoveryAction => Boolean(item));
+    .filter((item): item is PassengerRecoveryAction => Boolean(item))
+    .filter((item) => !actionLooksCompleted(item, executedTools));
   const timeline = asArray(record.timeline)
     .map(normalizeTimelineStep)
-    .filter((item): item is EscalationStep => Boolean(item));
+    .filter((item): item is EscalationStep => Boolean(item))
+    .filter((item) => !timelineLooksCompleted(item, executedTools));
   const modelStaffingOptions = asArray(record.staffingOptions)
     .map(normalizeStaffingOption)
     .filter((item): item is StaffingOption => Boolean(item));
-  const recommendedNextAction = normalizeRecoveryAction(record.recommendedNextAction) || actions[0] || {
+  const rawRecommendedNextAction = normalizeRecoveryAction(record.recommendedNextAction);
+  const recommendedNextAction =
+    (rawRecommendedNextAction && !actionLooksCompleted(rawRecommendedNextAction, executedTools) ? rawRecommendedNextAction : null) ||
+    actions[0] || {
     title: 'Review observed flight state',
     owner: 'Duty manager',
     reason: 'Begin with the tool-observed disruption details before expanding to more systems.',

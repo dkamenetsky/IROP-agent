@@ -46,6 +46,33 @@ function staffingStatusLabel(status: 'ready' | 'watch' | 'gap') {
   return 'short';
 }
 
+function staffingHeadline(option: RecoveryPlan['staffingOptions'][number]) {
+  const assignedNow = typeof option.scheduledCount === 'number' ? option.scheduledCount : null;
+  const shortfall = typeof option.shortfall === 'number' ? option.shortfall : null;
+
+  if (assignedNow === null) {
+    return `${option.required} needed`;
+  }
+
+  if (shortfall && shortfall > 0) {
+    return `${option.required} needed, ${assignedNow} assigned, still short ${shortfall}`;
+  }
+
+  return `${option.required} needed, ${assignedNow} assigned`;
+}
+
+function staffingRecommendationLabel(option: RecoveryPlan['staffingOptions'][number]) {
+  if (!option.recommendedStaff) {
+    return option.status === 'gap' ? 'No qualified extra staff available right now' : 'No extra backup staff available';
+  }
+
+  if (option.status === 'gap') {
+    return `Best person to add now: ${option.recommendedStaff}`;
+  }
+
+  return `Best extra backup if needed: ${option.recommendedStaff}`;
+}
+
 function toolLabel(tool: string, status?: RecoveryPlan['steps'][number]['status']) {
   if (tool === 'get_flight_state') return 'Checked flight status';
   if (tool === 'get_staffing_state') return 'Checked staffing';
@@ -468,16 +495,18 @@ export default function HomePage() {
                   <div key={option.role} className="rounded-2xl border border-slate-800 bg-slate-950 p-4">
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <div className="text-sm font-semibold text-slate-100">
-                        {option.role}: need {option.required}
+                        {option.role}
                       </div>
                       <span className={`rounded-full border px-3 py-1 text-xs font-medium capitalize ${tone(option.status === 'gap' ? 'high' : option.status === 'watch' ? 'medium' : 'low')}`}>
                         {staffingStatusLabel(option.status)}
                       </span>
                     </div>
-                    <div className="mt-3 text-sm text-slate-200">
-                      Best backup staff: <span className="font-medium text-sky-300">{option.recommendedStaff || 'No one available'}</span>
-                    </div>
+                    <div className="mt-3 text-sm text-slate-200">{staffingHeadline(option)}</div>
+                    <div className="mt-2 text-sm text-sky-300">{staffingRecommendationLabel(option)}</div>
                     <div className="mt-2 text-sm text-slate-300">{option.reason}</div>
+                    {typeof option.reserveAvailable === 'number' ? (
+                      <div className="mt-2 text-xs text-slate-500">Extra backup staff available: {option.reserveAvailable}</div>
+                    ) : null}
                     {option.backups.length ? <div className="mt-3 text-sm text-slate-300">Other options: {option.backups.join(', ')}</div> : null}
                     {option.excludedCandidates.length ? (
                       <details className="mt-3">

@@ -68,6 +68,9 @@ export interface StaffingOption {
   required: number;
   status: 'ready' | 'watch' | 'gap';
   recommendedStaff: string | null;
+  scheduledCount?: number;
+  reserveAvailable?: number;
+  shortfall?: number;
   backups: string[];
   reason: string;
   excludedCandidates: string[];
