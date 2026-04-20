@@ -193,22 +193,51 @@ function normalizeStaffingOption(value: unknown): StaffingOption | null {
   };
 }
 
+function sanitizeJsonCandidate(value: string) {
+  return value
+    .replace(/^\uFEFF/, '')
+    .replace(/[“”]/g, '"')
+    .replace(/[‘’]/g, "'")
+    .replace(/,\s*([}\]])/g, '$1')
+    .trim();
+}
+
 function extractJsonObject(text: string): unknown {
-  try {
-    return JSON.parse(text);
-  } catch {
-    const fencedMatch = text.match(/```json\s*([\s\S]*?)```/i);
-    if (fencedMatch?.[1]) {
-      return JSON.parse(fencedMatch[1]);
-    }
+  const candidates: string[] = [];
+  const trimmed = text.trim();
 
-    const objectMatch = text.match(/\{[\s\S]*\}/);
-    if (objectMatch) {
-      return JSON.parse(objectMatch[0]);
-    }
-
-    throw new Error('Model response did not contain valid JSON.');
+  if (trimmed) {
+    candidates.push(trimmed);
   }
+
+  const fencedMatch = text.match(/```json\s*([\s\S]*?)```/i);
+  if (fencedMatch?.[1]) {
+    candidates.push(fencedMatch[1].trim());
+  }
+
+  const objectMatch = text.match(/\{[\s\S]*\}/);
+  if (objectMatch?.[0]) {
+    candidates.push(objectMatch[0].trim());
+  }
+
+  const seen = new Set<string>();
+
+  for (const candidate of candidates) {
+    if (!candidate || seen.has(candidate)) continue;
+    seen.add(candidate);
+
+    try {
+      return JSON.parse(candidate);
+    } catch {
+      try {
+        return JSON.parse(sanitizeJsonCandidate(candidate));
+      } catch {
+        continue;
+      }
+    }
+  }
+
+  throw new Error('Model response did not contain valid JSON.');
 }
 
 function getObservedFlightRecord(incidentState: AgentIncidentState): Record<string, unknown> | null {
@@ -831,7 +860,18 @@ export async function runRecoveryAgent(input: AnalyzeInput, runtimeConfig: Runti
       continue;
     }
 
-    return normalizeRecoveryPlan(extractJsonObject(finalContent), input, incidentState);
+    try {
+      return normalizeRecoveryPlan(extractJsonObject(finalContent), input, incidentState);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : 'The previous response was not valid JSON.';
+      messages.push({
+        role: 'user',
+        content:
+          `Your previous final response was not valid strict JSON. Error: ${detail}. ` +
+          'Return the exact required JSON shape only, with double-quoted property names, no trailing commas, and no markdown fences.',
+      });
+      continue;
+    }
   }
 
   return buildFallbackPlanWithAgentTrace(
