@@ -268,7 +268,7 @@ export default function HomePage() {
                 disabled={loading}
                 className="rounded-2xl bg-sky-500 px-5 py-3 font-semibold text-slate-950 transition hover:bg-sky-400 disabled:opacity-50"
               >
-                {loading ? 'Building plan...' : 'Run AI plan'}
+                {loading ? 'Checking systems...' : 'Run AI plan'}
               </button>
               <button
                 onClick={() => {

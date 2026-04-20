@@ -38,12 +38,10 @@ Tool rules:
 - After observing the flight, call get_staffing_state for the same flight before you finalize any staffing recommendation or staffing risk.
 - Only use request_reserve_staff with the exact role and recommended staff member returned by the staffing tool for that role.
 - If staffing shows a watch or gap and a reserve option is available, use request_reserve_staff once before you finalize.
-- After request_reserve_staff, call get_staffing_state again so your final answer reflects the updated state.
 - Before you finalize passenger impact or passenger actions, call get_passenger_recovery_state for the same flight.
 - If passenger recovery shows a critical queue or a large manual handling backlog, use open_rebooking_support before you finalize passenger recovery recommendations.
-- After open_rebooking_support, call get_passenger_recovery_state again so your final answer reflects the updated state.
 - If passenger recovery says an announcement is ready, use publish_passenger_announcement before you finalize.
-- After publish_passenger_announcement, call get_passenger_recovery_state again so your final answer reflects the updated state.
+- Prefer combining independent read-only checks in the same response when possible to keep the workflow efficient.
 - Treat tool output as the authoritative system of record for this prototype.
 - Do not invent live staffing assignments or external system actions that cannot be verified from the available tool data.
 - Do not narrate tool execution history. The server will record actual tool steps separately.
@@ -308,7 +306,7 @@ function getObservedPrimaryDisruption(flightRecord: Record<string, unknown> | nu
 function getObservedStaffingRecord(incidentState: AgentIncidentState): Record<string, unknown> | null {
   const latestStaffingState = [...incidentState.toolOutputs]
     .reverse()
-    .find((item) => item.toolName === 'get_staffing_state');
+    .find((item) => item.toolName === 'get_staffing_state' || item.toolName === 'request_reserve_staff');
 
   if (!latestStaffingState) return null;
 
@@ -322,7 +320,12 @@ function getObservedStaffingRecord(incidentState: AgentIncidentState): Record<st
 function getObservedPassengerRecoveryRecord(incidentState: AgentIncidentState): Record<string, unknown> | null {
   const latestPassengerState = [...incidentState.toolOutputs]
     .reverse()
-    .find((item) => item.toolName === 'get_passenger_recovery_state');
+    .find(
+      (item) =>
+        item.toolName === 'get_passenger_recovery_state' ||
+        item.toolName === 'publish_passenger_announcement' ||
+        item.toolName === 'open_rebooking_support',
+    );
 
   if (!latestPassengerState) return null;
 
@@ -345,12 +348,6 @@ function getLastToolIndex(incidentState: AgentIncidentState, toolName: string) {
   }
 
   return -1;
-}
-
-function hasToolAfterIndex(incidentState: AgentIncidentState, toolName: string, index: number) {
-  if (index < 0) return false;
-
-  return incidentState.toolOutputs.some((item, itemIndex) => itemIndex > index && item.toolName === toolName);
 }
 
 function deriveStaffingOptionsFromObservedState(staffingRecord: Record<string, unknown> | null): StaffingOption[] {
@@ -653,10 +650,8 @@ function summarizeToolExecution(toolName: string, input: Record<string, unknown>
     }
 
     const action = asRecord(record.action);
-    return `Executed passenger announcement for ${asString(action.flightNumber, 'unknown flight')} as ${asString(
-      action.messageType,
-      'unspecified message',
-    )}.`;
+    const messageType = asString(action.messageType, 'passenger update').replace(/_/g, ' ');
+    return `Sent a ${messageType} to passengers for ${asString(action.flightNumber, 'unknown flight')}.`;
   }
 
   if (toolName === 'request_reserve_staff') {
@@ -817,8 +812,8 @@ export async function runRecoveryAgent(input: AnalyzeInput, runtimeConfig: Runti
       messages,
       tools: structuredToolDefinitions,
       toolChoice: 'auto',
-      parallelToolCalls: false,
-      temperature: 0.2,
+      parallelToolCalls: true,
+      temperature: 0.1,
     });
     const assistantMessage = completion.choices?.[0]?.message;
 
@@ -905,16 +900,6 @@ export async function runRecoveryAgent(input: AnalyzeInput, runtimeConfig: Runti
       continue;
     }
 
-    if (lastReserveStaffActionIndex >= 0 && !hasToolAfterIndex(incidentState, 'get_staffing_state', lastReserveStaffActionIndex)) {
-      const observedFlight = getObservedFlightRecord(incidentState);
-      const flightNumber = asString(observedFlight?.flightNumber, input.flightNumber || 'the same flight');
-      messages.push({
-        role: 'user',
-        content: `You executed request_reserve_staff for ${flightNumber}. Call get_staffing_state again before finalizing so your answer reflects the updated staffing state.`,
-      });
-      continue;
-    }
-
     if (!hasObservedTool(incidentState, 'get_passenger_recovery_state')) {
       const observedFlight = getObservedFlightRecord(incidentState);
       const flightNumber = asString(observedFlight?.flightNumber, input.flightNumber || 'the same flight');
@@ -940,35 +925,12 @@ export async function runRecoveryAgent(input: AnalyzeInput, runtimeConfig: Runti
       continue;
     }
 
-    if (
-      lastRebookingSupportActionIndex >= 0 &&
-      !hasToolAfterIndex(incidentState, 'get_passenger_recovery_state', lastRebookingSupportActionIndex)
-    ) {
-      const observedFlight = getObservedFlightRecord(incidentState);
-      const flightNumber = asString(observedFlight?.flightNumber, input.flightNumber || 'the same flight');
-      messages.push({
-        role: 'user',
-        content: `You executed open_rebooking_support for ${flightNumber}. Call get_passenger_recovery_state again before finalizing so your answer reflects the updated passenger state.`,
-      });
-      continue;
-    }
-
     if (passengerAnnouncementReady(observedPassengerRecovery) && lastAnnouncementActionIndex < lastPassengerObservationIndex) {
       const observedFlight = getObservedFlightRecord(incidentState);
       const flightNumber = asString(observedFlight?.flightNumber, input.flightNumber || 'the same flight');
       messages.push({
         role: 'user',
         content: `Before you finalize, call publish_passenger_announcement for ${flightNumber} using the recommended passenger update, then continue.`,
-      });
-      continue;
-    }
-
-    if (lastAnnouncementActionIndex >= 0 && !hasToolAfterIndex(incidentState, 'get_passenger_recovery_state', lastAnnouncementActionIndex)) {
-      const observedFlight = getObservedFlightRecord(incidentState);
-      const flightNumber = asString(observedFlight?.flightNumber, input.flightNumber || 'the same flight');
-      messages.push({
-        role: 'user',
-        content: `You executed publish_passenger_announcement for ${flightNumber}. Call get_passenger_recovery_state again before finalizing so your answer reflects the updated state.`,
       });
       continue;
     }
