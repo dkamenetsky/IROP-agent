@@ -40,6 +40,7 @@ export interface ToolStep {
   tool: string;
   input: Record<string, unknown>;
   outputSummary: string;
+  status?: 'success' | 'error' | 'info';
 }
 
 export interface RecoveryAction {

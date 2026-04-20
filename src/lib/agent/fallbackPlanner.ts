@@ -30,11 +30,13 @@ export async function runFallbackPlanner(input: AnalyzeInput, runtimeConfig: Run
       tool: 'resolve_input',
       input: { ...input },
       outputSummary: `Resolved ${flight.flightNumber} with disruption type ${disruptionType.label}.`,
+      status: 'info',
     },
     {
       tool: 'load_flight_context',
       input: { flightNumber: flight.flightNumber },
       outputSummary: `${flight.flightNumber} departs ${flight.route} from ${flight.gate}.`,
+      status: 'info',
     },
     {
       tool: 'evaluate_staffing',
@@ -42,11 +44,13 @@ export async function runFallbackPlanner(input: AnalyzeInput, runtimeConfig: Run
       outputSummary: staffingOptions
         .map((option) => `${option.role}: ${option.recommendedStaff || 'no candidate'} (${option.status})`)
         .join('; '),
+      status: 'info',
     },
     {
       tool: 'assemble_recovery_plan',
       input: { disruptionTypeId: disruptionType.id },
       outputSummary: `${actions.length} operational actions, ${passengerActions.length} passenger actions, ${timeline.length} timeline steps.`,
+      status: 'info',
     },
   ];
 

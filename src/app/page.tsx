@@ -33,15 +33,60 @@ function modeLabel(mode: RecoveryPlan['mode']) {
   return mode;
 }
 
-function toolLabel(tool: string) {
+function staffingStatusLabel(status: 'ready' | 'watch' | 'gap') {
+  if (status === 'ready') return 'covered';
+  if (status === 'watch') return 'tight';
+  return 'short';
+}
+
+function toolLabel(tool: string, status?: RecoveryPlan['steps'][number]['status']) {
   if (tool === 'get_flight_state') return 'Checked flight status';
   if (tool === 'get_staffing_state') return 'Checked staffing';
   if (tool === 'get_passenger_recovery_state') return 'Checked passenger impact';
   if (tool === 'open_rebooking_support') return 'Opened rebooking support';
   if (tool === 'publish_passenger_announcement') return 'Sent passenger update';
+  if (tool === 'request_reserve_staff' && status === 'error') return 'Reserve staff request rejected';
   if (tool === 'request_reserve_staff') return 'Assigned reserve staff';
   if (tool === 'agent_fallback') return 'Agent handoff';
   return tool;
+}
+
+function formatToolInput(step: RecoveryPlan['steps'][number]) {
+  const parts: string[] = [];
+
+  if (typeof step.input.flightNumber === 'string') {
+    parts.push(`Flight ${step.input.flightNumber}`);
+  }
+
+  if (typeof step.input.role === 'string') {
+    parts.push(`Role: ${step.input.role}`);
+  }
+
+  if (typeof step.input.staffName === 'string') {
+    parts.push(`Staff: ${step.input.staffName}`);
+  }
+
+  if (typeof step.input.messageType === 'string') {
+    parts.push(`Message: ${step.input.messageType.replace(/_/g, ' ')}`);
+  }
+
+  if (typeof step.input.reason === 'string') {
+    parts.push(`Reason: ${step.input.reason}`);
+  }
+
+  return parts.join(' | ') || 'System step';
+}
+
+function stepTone(status?: RecoveryPlan['steps'][number]['status']) {
+  if (status === 'error') return 'border-rose-900/70 bg-rose-950/20';
+  if (status === 'success') return 'border-slate-800 bg-slate-900';
+  return 'border-slate-800 bg-slate-900';
+}
+
+function stepStatusLabel(status?: RecoveryPlan['steps'][number]['status']) {
+  if (status === 'error') return 'Attempt rejected';
+  if (status === 'success') return 'Completed';
+  return 'Info';
 }
 
 export default function HomePage() {
@@ -275,7 +320,7 @@ export default function HomePage() {
                     <div className="mt-1 text-sm text-slate-400">{result.disruptionType}</div>
                   </div>
                     <div className={`rounded-full border px-3 py-1 text-xs font-medium capitalize ${tone(result.staffingRisk)}`}>
-                    {result.staffingRisk} staff risk
+                    {result.staffingRisk} staffing risk
                    </div>
                 </div>
                 <p className="mt-4 text-sm leading-6 text-slate-200">{result.summary}</p>
@@ -287,23 +332,25 @@ export default function HomePage() {
 
               {result.steps.some(
                 (step) =>
-                  step.tool === 'publish_passenger_announcement' ||
-                  step.tool === 'request_reserve_staff' ||
-                  step.tool === 'open_rebooking_support',
+                  step.status === 'success' &&
+                  (step.tool === 'publish_passenger_announcement' ||
+                    step.tool === 'request_reserve_staff' ||
+                    step.tool === 'open_rebooking_support'),
               ) ? (
                 <div className="rounded-3xl border border-emerald-800/50 bg-emerald-950/20 p-5">
-                  <div className="text-sm font-semibold text-emerald-200">AI already did this</div>
+                  <div className="text-sm font-semibold text-emerald-200">AI completed these actions</div>
                   <div className="mt-3 space-y-3">
                     {result.steps
                       .filter(
                         (step) =>
-                          step.tool === 'publish_passenger_announcement' ||
-                          step.tool === 'request_reserve_staff' ||
-                          step.tool === 'open_rebooking_support',
+                          step.status === 'success' &&
+                          (step.tool === 'publish_passenger_announcement' ||
+                            step.tool === 'request_reserve_staff' ||
+                            step.tool === 'open_rebooking_support'),
                       )
                       .map((step, index) => (
                         <div key={`${step.tool}-${index}`} className="rounded-2xl border border-emerald-900/60 bg-slate-950/70 p-4">
-                          <div className="text-sm font-medium text-emerald-200">{toolLabel(step.tool)}</div>
+                          <div className="text-sm font-medium text-emerald-200">{toolLabel(step.tool, step.status)}</div>
                           <div className="mt-2 text-sm text-slate-300">{step.outputSummary}</div>
                         </div>
                       ))}
@@ -348,16 +395,19 @@ export default function HomePage() {
                         {option.role}: need {option.required}
                       </div>
                       <span className={`rounded-full border px-3 py-1 text-xs font-medium capitalize ${tone(option.status === 'gap' ? 'high' : option.status === 'watch' ? 'medium' : 'low')}`}>
-                        {option.status}
+                        {staffingStatusLabel(option.status)}
                       </span>
                     </div>
                     <div className="mt-3 text-sm text-slate-200">
-                      Best reserve option: <span className="font-medium text-sky-300">{option.recommendedStaff || 'No one available'}</span>
+                      Best backup staff: <span className="font-medium text-sky-300">{option.recommendedStaff || 'No one available'}</span>
                     </div>
                     <div className="mt-2 text-sm text-slate-300">{option.reason}</div>
                     {option.backups.length ? <div className="mt-3 text-sm text-slate-300">Other options: {option.backups.join(', ')}</div> : null}
                     {option.excludedCandidates.length ? (
-                      <div className="mt-3 text-xs text-slate-500">Not available: {option.excludedCandidates.join(' | ')}</div>
+                      <details className="mt-3">
+                        <summary className="cursor-pointer text-xs text-slate-500">Why others were not available</summary>
+                        <div className="mt-2 text-xs text-slate-500">{option.excludedCandidates.join(' | ')}</div>
+                      </details>
                     ) : null}
                   </div>
                 ))}
@@ -432,9 +482,16 @@ export default function HomePage() {
                 <summary className="cursor-pointer text-sm font-semibold text-slate-200">How the AI worked</summary>
                 <div className="mt-4 space-y-3">
                   {result.steps.map((step, idx) => (
-                    <div key={`${step.tool}-${idx}`} className="rounded-2xl border border-slate-800 bg-slate-900 p-4">
-                      <div className="text-sm font-medium text-sky-300">{toolLabel(step.tool)}</div>
-                      <div className="mt-1 text-xs text-slate-500">Used with: {JSON.stringify(step.input)}</div>
+                    <div key={`${step.tool}-${idx}`} className={`rounded-2xl border p-4 ${stepTone(step.status)}`}>
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div className={`text-sm font-medium ${step.status === 'error' ? 'text-rose-300' : 'text-sky-300'}`}>
+                          {toolLabel(step.tool, step.status)}
+                        </div>
+                        <div className="rounded-full border border-slate-700 px-2.5 py-1 text-[11px] text-slate-400">
+                          {stepStatusLabel(step.status)}
+                        </div>
+                      </div>
+                      <div className="mt-1 text-xs text-slate-500">{formatToolInput(step)}</div>
                       <div className="mt-2 text-sm text-slate-300">{step.outputSummary}</div>
                     </div>
                   ))}

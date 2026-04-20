@@ -36,6 +36,7 @@ You must gather facts with tools before making a recovery recommendation.
 Tool rules:
 - If a flight number is present or can be inferred, call get_flight_state before you answer.
 - After observing the flight, call get_staffing_state for the same flight before you finalize any staffing recommendation or staffing risk.
+- Only use request_reserve_staff with the exact role and recommended staff member returned by the staffing tool for that role.
 - If staffing shows a watch or gap and a reserve option is available, use request_reserve_staff once before you finalize.
 - After request_reserve_staff, call get_staffing_state again so your final answer reflects the updated state.
 - Before you finalize passenger impact or passenger actions, call get_passenger_recovery_state for the same flight.
@@ -135,6 +136,48 @@ function asArray(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
 }
 
+function simplifyPlainLanguage(text: string): string {
+  return text
+    .replace(/\bmisconnects?\b/gi, (match) => (match.toLowerCase().endsWith('s') ? 'missed connections' : 'missed connection'))
+    .replace(/\breaccommodation\b/gi, 'rebooking')
+    .replace(/\bmanual handling\b/gi, 'manual help')
+    .replace(/\breserve depth\b/gi, 'backup staff available')
+    .replace(/\brecovery flexibility\b/gi, 'backup options')
+    .replace(/\bheadcount\b/gi, 'staffing level')
+    .replace(/\bdisruption window\b/gi, 'active disruption period')
+    .trim();
+}
+
+function humanizeDisruptionLabel(value: string): string {
+  const normalized = value.trim().toLowerCase();
+
+  const knownLabels: Record<string, string> = {
+    delay: 'Departure delay',
+    late_inbound: 'Late inbound aircraft',
+    gate_change: 'Gate change',
+    cancellation: 'Cancellation',
+    crew_timeout_risk: 'Crew timeout risk',
+  };
+
+  if (knownLabels[normalized]) {
+    return knownLabels[normalized];
+  }
+
+  if (!normalized) {
+    return '';
+  }
+
+  if (normalized.includes('_')) {
+    return normalized
+      .split('_')
+      .filter(Boolean)
+      .map((part) => part[0]?.toUpperCase() + part.slice(1))
+      .join(' ');
+  }
+
+  return value.trim();
+}
+
 function normalizeRecoveryAction(value: unknown): RecoveryAction | null {
   const record = asRecord(value);
   const title = asString(record.title);
@@ -143,8 +186,8 @@ function normalizeRecoveryAction(value: unknown): RecoveryAction | null {
   return {
     title,
     owner: asString(record.owner, 'Duty manager'),
-    reason: asString(record.reason, 'No reason provided by model.'),
-    impact: asString(record.impact, 'Impact not specified.'),
+    reason: simplifyPlainLanguage(asString(record.reason, 'No reason provided by model.')),
+    impact: simplifyPlainLanguage(asString(record.impact, 'Impact not specified.')),
   };
 }
 
@@ -156,7 +199,7 @@ function normalizePassengerAction(value: unknown): PassengerRecoveryAction | nul
   return {
     title,
     owner: asString(record.owner, 'Duty manager'),
-    reason: asString(record.reason, 'No reason provided by model.'),
+    reason: simplifyPlainLanguage(asString(record.reason, 'No reason provided by model.')),
   };
 }
 
@@ -167,8 +210,8 @@ function normalizeTimelineStep(value: unknown): EscalationStep | null {
 
   return {
     phase,
-    trigger: asString(record.trigger, 'Monitor the situation and reassess as new facts arrive.'),
-    action: asString(record.action, 'Continue coordinating the station response.'),
+    trigger: simplifyPlainLanguage(asString(record.trigger, 'Monitor the situation and reassess as new facts arrive.')),
+    action: simplifyPlainLanguage(asString(record.action, 'Continue coordinating the station response.')),
     owner: asString(record.owner, 'Duty manager'),
   };
 }
@@ -188,7 +231,7 @@ function normalizeStaffingOption(value: unknown): StaffingOption | null {
     status,
     recommendedStaff: typeof record.recommendedStaff === 'string' ? record.recommendedStaff : null,
     backups: asArray(record.backups).map((item) => asString(item)).filter(Boolean),
-    reason: asString(record.reason, 'Staffing verification is not available in this iteration.'),
+    reason: simplifyPlainLanguage(asString(record.reason, 'Staffing verification is not available in this iteration.')),
     excludedCandidates: asArray(record.excludedCandidates).map((item) => asString(item)).filter(Boolean),
   };
 }
@@ -324,7 +367,7 @@ function deriveStaffingOptionsFromObservedState(staffingRecord: Record<string, u
         statusValue === 'ready' || statusValue === 'watch' || statusValue === 'gap' ? statusValue : 'watch';
 
       const complianceRisks = asArray(entry.complianceRisks).map((item) => asString(item)).filter(Boolean);
-      const baseReason = asString(entry.reason, 'Observed staffing state is available.');
+      const baseReason = simplifyPlainLanguage(asString(entry.reason, 'Observed staffing state is available.'));
 
       return {
         role,
@@ -332,7 +375,7 @@ function deriveStaffingOptionsFromObservedState(staffingRecord: Record<string, u
         status,
         recommendedStaff: typeof entry.recommendedStaff === 'string' ? entry.recommendedStaff : null,
         backups: asArray(entry.backups).map((item) => asString(item)).filter(Boolean),
-        reason: complianceRisks.length ? `${baseReason} Compliance watch: ${complianceRisks.join('; ')}.` : baseReason,
+        reason: complianceRisks.length ? `${baseReason} Compliance warning: ${complianceRisks.join('; ')}.` : baseReason,
         excludedCandidates: asArray(entry.excludedCandidates).map((item) => asString(item)).filter(Boolean),
       } satisfies StaffingOption;
     })
@@ -491,6 +534,55 @@ function formatObservedImpactedWindow(
   return formatter.format(start);
 }
 
+function normalizeImpactedWindowText(
+  impactedWindow: string,
+  flightRecord: Record<string, unknown> | null,
+  disruptionRecord: Record<string, unknown> | null,
+) {
+  const trimmed = impactedWindow.trim();
+  if (!trimmed) {
+    return formatObservedImpactedWindow(flightRecord, disruptionRecord);
+  }
+
+  if (/^\d{4}-\d{2}-\d{2}t\d{2}:\d{2}/i.test(trimmed) || /^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    return formatObservedImpactedWindow(flightRecord, disruptionRecord);
+  }
+
+  return trimmed;
+}
+
+function buildFriendlyPassengerImpact(
+  passengerRecord: Record<string, unknown> | null,
+  disruptionRecord: Record<string, unknown> | null,
+) {
+  if (!passengerRecord) {
+    return simplifyPlainLanguage(asString(disruptionRecord?.passengerImpact, 'Passenger impact needs confirmation.'));
+  }
+
+  const impactedPassengers =
+    typeof passengerRecord.impactedPassengers === 'number' ? passengerRecord.impactedPassengers : 'Affected';
+  const queueStatus = asString(passengerRecord.queueStatus, 'unknown');
+  const misconnectRisk = asString(passengerRecord.misconnectRisk, 'unknown');
+
+  return `${impactedPassengers} passengers are affected. Passenger crowding is ${queueStatus} and missed-connection risk is ${misconnectRisk}.`;
+}
+
+function getToolStepStatus(output: unknown): ToolStep['status'] {
+  const record = asRecord(output);
+  if (typeof record.ok === 'boolean') {
+    return record.ok ? 'success' : 'error';
+  }
+
+  return 'info';
+}
+
+function displayStaffingStatus(status: string) {
+  if (status === 'ready') return 'covered';
+  if (status === 'watch') return 'tight';
+  if (status === 'gap') return 'short';
+  return status;
+}
+
 function summarizeToolExecution(toolName: string, input: Record<string, unknown>, output: unknown): string {
   const record = asRecord(output);
 
@@ -527,7 +619,13 @@ function summarizeToolExecution(toolName: string, input: Record<string, unknown>
     const overallRisk = asString(staffing.overallRisk, 'unknown');
     const roleCoverage = asArray(staffing.roleCoverage)
       .map(asRecord)
-      .map((entry) => `${asString(entry.role)}: ${asString(entry.status)} with ${asString(entry.recommendedStaff, 'no primary candidate')}`)
+      .map(
+        (entry) =>
+          `${asString(entry.role)}: ${displayStaffingStatus(asString(entry.status))} with ${asString(
+            entry.recommendedStaff,
+            'no primary candidate',
+          )}`,
+      )
       .filter(Boolean);
 
     return `Observed staffing risk ${overallRisk}. ${roleCoverage.join('; ')}.`;
@@ -545,13 +643,13 @@ function summarizeToolExecution(toolName: string, input: Record<string, unknown>
     const impactedPassengers =
       typeof passengerRecovery.impactedPassengers === 'number' ? passengerRecovery.impactedPassengers : 0;
 
-    return `Observed passenger recovery state: ${impactedPassengers} impacted passengers, queue ${queueStatus}, misconnect risk ${misconnectRisk}.`;
+    return `Observed passenger recovery state: ${impactedPassengers} affected passengers, queue ${queueStatus}, missed-connection risk ${misconnectRisk}.`;
   }
 
   if (toolName === 'publish_passenger_announcement') {
     if (record.ok !== true) {
       const errorRecord = asRecord(record.error);
-      return asString(errorRecord.message, 'Passenger announcement execution failed.');
+      return `Passenger update was not sent: ${simplifyPlainLanguage(asString(errorRecord.message, 'Passenger announcement execution failed.'))}`;
     }
 
     const action = asRecord(record.action);
@@ -564,7 +662,17 @@ function summarizeToolExecution(toolName: string, input: Record<string, unknown>
   if (toolName === 'request_reserve_staff') {
     if (record.ok !== true) {
       const errorRecord = asRecord(record.error);
-      return asString(errorRecord.message, 'Reserve staffing action failed.');
+      const code = asString(errorRecord.code);
+      const rawMessage = asString(errorRecord.message, 'Reserve staffing action failed.');
+
+      if (code === 'ROLE_MISMATCH') {
+        const match = rawMessage.match(/^(.*?) is a (.*?), not a (.*?)\.$/);
+        if (match) {
+          return `Reserve staff request was rejected: ${match[1]} is assigned to ${match[2].toLowerCase()} work, not ${match[3].toLowerCase()} work.`;
+        }
+      }
+
+      return `Reserve staff request was rejected: ${simplifyPlainLanguage(rawMessage)}`;
     }
 
     const action = asRecord(record.action);
@@ -577,7 +685,7 @@ function summarizeToolExecution(toolName: string, input: Record<string, unknown>
   if (toolName === 'open_rebooking_support') {
     if (record.ok !== true) {
       const errorRecord = asRecord(record.error);
-      return asString(errorRecord.message, 'Rebooking support action failed.');
+      return `Extra rebooking support was not opened: ${simplifyPlainLanguage(asString(errorRecord.message, 'Rebooking support action failed.'))}`;
     }
 
     const passengerRecovery = asRecord(record.passengerRecovery);
@@ -624,33 +732,36 @@ function normalizeRecoveryPlan(rawPlan: unknown, input: AnalyzeInput, incidentSt
   const observedOverallRisk = asRiskLevel(observedStaffing?.overallRisk, 'medium');
 
   return {
-    summary: asString(
+    summary: simplifyPlainLanguage(asString(
       record.summary,
       `Observed ${asString(observedFlight?.flightNumber, input.flightNumber || 'flight')} and generated a recovery plan from tool-backed mock system state.`,
-    ),
+    )),
     disruptedFlight: asString(record.disruptedFlight, asString(observedFlight?.flightNumber, input.flightNumber || 'Unknown flight')),
-    disruptionType: asString(record.disruptionType, asString(observedDisruption?.label, input.disruptionTypeId || 'Unknown disruption')),
-    impactedWindow: asString(record.impactedWindow, formatObservedImpactedWindow(observedFlight, observedDisruption)),
-    staffingRisk: observedStaffing ? observedOverallRisk : asRiskLevel(record.staffingRisk, 'medium'),
-    passengerImpact: asString(
-      record.passengerImpact,
-      observedPassengerRecovery
-        ? `${typeof observedPassengerRecovery.impactedPassengers === 'number' ? observedPassengerRecovery.impactedPassengers : 'Affected'} passengers are impacted, queue status is ${asString(
-            observedPassengerRecovery.queueStatus,
-            'unknown',
-          )}, and misconnect risk is ${asString(observedPassengerRecovery.misconnectRisk, 'unknown')}.`
-        : asString(observedDisruption?.passengerImpact, 'Passenger impact requires confirmation from additional tools.'),
+    disruptionType: humanizeDisruptionLabel(
+      asString(record.disruptionType, asString(observedDisruption?.label, input.disruptionTypeId || 'Unknown disruption')),
     ),
-    operationalFocus: asString(
+    impactedWindow: normalizeImpactedWindowText(
+      asString(record.impactedWindow, ''),
+      observedFlight,
+      observedDisruption,
+    ),
+    staffingRisk: observedStaffing ? observedOverallRisk : asRiskLevel(record.staffingRisk, 'medium'),
+    passengerImpact: simplifyPlainLanguage(asString(
+      record.passengerImpact,
+      buildFriendlyPassengerImpact(observedPassengerRecovery, observedDisruption),
+    )),
+    operationalFocus: simplifyPlainLanguage(asString(
       record.operationalFocus,
       asString(observedDisruption?.operationalImpact, 'Coordinate the station around the observed disruption state.'),
-    ),
+    )),
     recommendedNextAction,
     actions,
     timeline,
     staffingOptions: observedStaffingOptions.length ? observedStaffingOptions : modelStaffingOptions,
     passengerActions: observedPassengerActions.length ? observedPassengerActions : passengerActions,
-    alternatives: asArray(record.alternatives).map((item) => asString(item)).filter(Boolean),
+    alternatives: asArray(record.alternatives)
+      .map((item) => simplifyPlainLanguage(asString(item)))
+      .filter(Boolean),
     steps: incidentState.toolSteps,
     mode: 'openrouter-agent',
     incidentContext: buildIncidentContext(incidentState),
@@ -674,6 +785,7 @@ async function buildFallbackPlanWithAgentTrace(
         attemptedToolCalls: incidentState.toolSteps.length,
       },
       outputSummary: `OpenRouter was attempted but the agent loop did not finish cleanly. The backup planner completed the response instead. Reason: ${reason}.`,
+      status: 'info',
     },
   ];
 
@@ -743,6 +855,7 @@ export async function runRecoveryAgent(input: AnalyzeInput, runtimeConfig: Runti
           tool: toolCall.function.name,
           input: parsedInput,
           outputSummary: summarizeToolExecution(toolCall.function.name, parsedInput, result),
+          status: getToolStepStatus(result),
         });
 
         messages.push({

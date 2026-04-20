@@ -20,17 +20,25 @@ function normalizeInput(value: unknown): AnalyzeInput {
 function normalizeSteps(value: unknown): ToolStep[] {
   if (!Array.isArray(value)) return [];
 
-  return value
-    .map((item) => {
-      if (!item || typeof item !== 'object') return null;
-      const record = item as Record<string, unknown>;
-      return {
-        tool: asString(record.tool),
-        input: record.input && typeof record.input === 'object' && !Array.isArray(record.input) ? (record.input as Record<string, unknown>) : {},
-        outputSummary: asString(record.outputSummary),
-      };
-    })
-    .filter((item): item is ToolStep => Boolean(item?.tool));
+  return value.reduce<ToolStep[]>((steps, item) => {
+    if (!item || typeof item !== 'object') return steps;
+
+    const record = item as Record<string, unknown>;
+    const tool = asString(record.tool);
+    if (!tool) return steps;
+
+    steps.push({
+      tool,
+      input: record.input && typeof record.input === 'object' && !Array.isArray(record.input) ? (record.input as Record<string, unknown>) : {},
+      outputSummary: asString(record.outputSummary),
+      status:
+        record.status === 'success' || record.status === 'error' || record.status === 'info'
+          ? (record.status as ToolStep['status'])
+          : undefined,
+    });
+
+    return steps;
+  }, []);
 }
 
 function normalizePlan(value: unknown): Partial<RecoveryPlan> | null {
