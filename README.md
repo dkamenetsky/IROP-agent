@@ -89,7 +89,7 @@ Important implementation detail:
 The fallback planner is the most reliable description of current business behavior:
 
 - extracts the first `PD###` flight number from the message
-- defaults to `PD218` if none is found
+- defaults to `PD123` if none is found
 - fetches disruption details
 - fetches flight context
 - computes staffing risk
@@ -126,8 +126,8 @@ The decision space is narrow by design. This is a demo of orchestration structur
 These are the main behavior limits in the current implementation:
 
 - The app is entirely mock-data driven. Anything outside the hardcoded dataset will fail.
-- Flight extraction is regex-based and defaults to `PD218`, so prompts without a recognizable flight number can produce misleading plans.
-- `getDisruptionForFlight()` returns the first matching disruption for a flight. Because `PD218` has both `delay` and `late_inbound` disruptions, the later `late_inbound` scenario is effectively unreachable in current logic.
+- Flight extraction is regex-based and defaults to `PD123`, so prompts without a recognizable flight number can produce misleading plans.
+- `getDisruptionForFlight()` returns the first matching disruption for a flight. Because `PD123` has both `delay` and `late_inbound` disruptions, the later `late_inbound` scenario is effectively unreachable in current logic.
 - Staffing feasibility is simplified to role match, reserve preference, and weekly hours cap. Shift overlap, location, exact qualification coverage, and task timing are not modeled.
 - `generate_recovery_actions()` is template-driven, so recommendations are scenario-shaped rather than dynamically optimized.
 - The UI displays tool-step summaries only; there is no trace viewer, audit log, or raw payload inspector.
@@ -308,10 +308,10 @@ mmdc -i docs/request-sequence.mmd -o docs/request-sequence.svg
 
 ## Example Prompts
 
-- `PD218 is delayed 95 minutes. What should we do?`
-- `How should we handle the cancellation of PD412?`
-- `Gate changed for PD305 from A2 to A5. Give me a staffing plan.`
-- `A late inbound aircraft will push PD218 back by 70 minutes. Minimize overtime.`
+- `PD123 is delayed 95 minutes. What should we do?`
+- `How should we handle the cancellation of PD67?`
+- `Gate changed for PD010 from A2 to A5. Give me a staffing plan.`
+- `A late inbound aircraft will push PD123 back by 70 minutes. Minimize overtime.`
 
 ## Verification Status
 

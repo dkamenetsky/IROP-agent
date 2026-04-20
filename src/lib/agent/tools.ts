@@ -39,7 +39,7 @@ export function pickFlightNumber(input: AnalyzeInput): string {
   }
 
   const source = `${input.notes || ''} ${input.message || ''}`;
-  const match = source.match(/PD\d{3}/i);
+  const match = source.match(/PD\d{2,3}/i);
   const inferred = match?.[0]?.toUpperCase();
   const knownFlight = inferred ? flights.find((item) => item.flightNumber.toUpperCase() === inferred) : undefined;
   return knownFlight?.flightNumber || flights[0].flightNumber;

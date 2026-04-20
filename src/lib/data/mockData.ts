@@ -3,7 +3,7 @@ import { Disruption, Flight, StaffMember } from '@/lib/types';
 export const flights: Flight[] = [
   {
     id: 'f1',
-    flightNumber: 'PD218',
+    flightNumber: 'PD123',
     route: 'YTZ → YOW',
     gate: 'A2',
     scheduledDeparture: '2026-04-17T17:10:00',
@@ -12,7 +12,7 @@ export const flights: Flight[] = [
   },
   {
     id: 'f2',
-    flightNumber: 'PD412',
+    flightNumber: 'PD67',
     route: 'YTZ → YUL',
     gate: 'A4',
     scheduledDeparture: '2026-04-17T18:00:00',
@@ -21,7 +21,7 @@ export const flights: Flight[] = [
   },
   {
     id: 'f3',
-    flightNumber: 'PD305',
+    flightNumber: 'PD010',
     route: 'YTZ → EWR',
     gate: 'A2',
     scheduledDeparture: '2026-04-17T18:20:00',
@@ -33,7 +33,7 @@ export const flights: Flight[] = [
 export const disruptions: Disruption[] = [
   {
     id: 'd1',
-    flightNumber: 'PD218',
+    flightNumber: 'PD123',
     type: 'delay',
     minutesDelayed: 95,
     reason: 'Crew arrival delay from inbound aircraft',
@@ -41,14 +41,14 @@ export const disruptions: Disruption[] = [
   },
   {
     id: 'd2',
-    flightNumber: 'PD412',
+    flightNumber: 'PD67',
     type: 'cancellation',
     reason: 'Weather and network recovery constraints',
     severity: 'high',
   },
   {
     id: 'd3',
-    flightNumber: 'PD305',
+    flightNumber: 'PD010',
     type: 'gate_change',
     newGate: 'A5',
     reason: 'Stand availability conflict',
@@ -56,7 +56,7 @@ export const disruptions: Disruption[] = [
   },
   {
     id: 'd4',
-    flightNumber: 'PD218',
+    flightNumber: 'PD123',
     type: 'late_inbound',
     minutesDelayed: 70,
     reason: 'Late aircraft arrival from previous sector',
@@ -75,7 +75,7 @@ export const staff: StaffMember[] = [
     hoursThisWeek: 34,
     maxHours: 40,
     onReserve: false,
-    assignedFlights: ['PD218'],
+    assignedFlights: ['PD123'],
   },
   {
     id: 's2',
@@ -87,7 +87,7 @@ export const staff: StaffMember[] = [
     hoursThisWeek: 30,
     maxHours: 40,
     onReserve: true,
-    assignedFlights: ['PD412'],
+    assignedFlights: ['PD67'],
   },
   {
     id: 's3',
@@ -99,7 +99,7 @@ export const staff: StaffMember[] = [
     hoursThisWeek: 32,
     maxHours: 40,
     onReserve: false,
-    assignedFlights: ['PD218', 'PD305'],
+    assignedFlights: ['PD123', 'PD010'],
   },
   {
     id: 's4',
@@ -111,7 +111,7 @@ export const staff: StaffMember[] = [
     hoursThisWeek: 28,
     maxHours: 40,
     onReserve: true,
-    assignedFlights: ['PD412'],
+    assignedFlights: ['PD67'],
   },
   {
     id: 's5',
@@ -123,7 +123,7 @@ export const staff: StaffMember[] = [
     hoursThisWeek: 36,
     maxHours: 40,
     onReserve: false,
-    assignedFlights: ['PD412'],
+    assignedFlights: ['PD67'],
   },
   {
     id: 's6',
@@ -147,7 +147,7 @@ export const staff: StaffMember[] = [
     hoursThisWeek: 38,
     maxHours: 45,
     onReserve: false,
-    assignedFlights: ['PD218', 'PD412', 'PD305'],
+    assignedFlights: ['PD123', 'PD67', 'PD010'],
   },
   {
     id: 's8',

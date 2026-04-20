@@ -110,8 +110,8 @@ const REQUEST_RESERVE_STAFF_TOOL = 'request_reserve_staff';
 const OPEN_REBOOKING_SUPPORT_TOOL = 'open_rebooking_support';
 
 const BASE_FLIGHT_STATES: Record<string, MockFlightState> = {
-  PD218: {
-    flightNumber: 'PD218',
+  PD123: {
+    flightNumber: 'PD123',
     station: 'YTZ',
     route: { origin: 'YTZ', destination: 'YOW' },
     scheduledDeparture: '2026-04-17T17:10:00',
@@ -144,8 +144,8 @@ const BASE_FLIGHT_STATES: Record<string, MockFlightState> = {
       },
     ],
   },
-  PD412: {
-    flightNumber: 'PD412',
+  PD67: {
+    flightNumber: 'PD67',
     station: 'YTZ',
     route: { origin: 'YTZ', destination: 'YUL' },
     scheduledDeparture: '2026-04-17T18:00:00',
@@ -177,8 +177,8 @@ const BASE_FLIGHT_STATES: Record<string, MockFlightState> = {
       },
     ],
   },
-  PD305: {
-    flightNumber: 'PD305',
+  PD010: {
+    flightNumber: 'PD010',
     station: 'YTZ',
     route: { origin: 'YTZ', destination: 'EWR' },
     scheduledDeparture: '2026-04-17T18:20:00',
@@ -213,7 +213,7 @@ const BASE_STAFF_ROSTER: MockStaffRecord[] = [
     hoursThisWeek: 34,
     maxHours: 40,
     onReserve: false,
-    assignedFlights: ['PD218'],
+    assignedFlights: ['PD123'],
   },
   {
     id: 's2',
@@ -225,7 +225,7 @@ const BASE_STAFF_ROSTER: MockStaffRecord[] = [
     hoursThisWeek: 30,
     maxHours: 40,
     onReserve: true,
-    assignedFlights: ['PD412'],
+    assignedFlights: ['PD67'],
   },
   {
     id: 's3',
@@ -237,7 +237,7 @@ const BASE_STAFF_ROSTER: MockStaffRecord[] = [
     hoursThisWeek: 32,
     maxHours: 40,
     onReserve: false,
-    assignedFlights: ['PD218', 'PD305'],
+    assignedFlights: ['PD123', 'PD010'],
   },
   {
     id: 's4',
@@ -249,7 +249,7 @@ const BASE_STAFF_ROSTER: MockStaffRecord[] = [
     hoursThisWeek: 28,
     maxHours: 40,
     onReserve: true,
-    assignedFlights: ['PD412'],
+    assignedFlights: ['PD67'],
   },
   {
     id: 's5',
@@ -261,7 +261,7 @@ const BASE_STAFF_ROSTER: MockStaffRecord[] = [
     hoursThisWeek: 36,
     maxHours: 40,
     onReserve: false,
-    assignedFlights: ['PD412'],
+    assignedFlights: ['PD67'],
   },
   {
     id: 's6',
@@ -285,7 +285,7 @@ const BASE_STAFF_ROSTER: MockStaffRecord[] = [
     hoursThisWeek: 38,
     maxHours: 45,
     onReserve: false,
-    assignedFlights: ['PD218', 'PD412', 'PD305'],
+    assignedFlights: ['PD123', 'PD67', 'PD010'],
   },
   {
     id: 's8',
@@ -302,8 +302,8 @@ const BASE_STAFF_ROSTER: MockStaffRecord[] = [
 ];
 
 const BASE_PASSENGER_RECOVERY_STATES: Record<string, MockPassengerRecoveryState> = {
-  PD218: {
-    flightNumber: 'PD218',
+  PD123: {
+    flightNumber: 'PD123',
     totalPassengers: 94,
     impactedPassengers: 94,
     misconnectRisk: 'medium',
@@ -325,8 +325,8 @@ const BASE_PASSENGER_RECOVERY_STATES: Record<string, MockPassengerRecoveryState>
       'A moderate number of connecting passengers may need proactive timing support.',
     ],
   },
-  PD412: {
-    flightNumber: 'PD412',
+  PD67: {
+    flightNumber: 'PD67',
     totalPassengers: 76,
     impactedPassengers: 76,
     misconnectRisk: 'high',
@@ -348,8 +348,8 @@ const BASE_PASSENGER_RECOVERY_STATES: Record<string, MockPassengerRecoveryState>
       'Queue growth is likely unless visible rebooking support is added quickly.',
     ],
   },
-  PD305: {
-    flightNumber: 'PD305',
+  PD010: {
+    flightNumber: 'PD010',
     totalPassengers: 88,
     impactedPassengers: 88,
     misconnectRisk: 'low',
@@ -385,7 +385,7 @@ export const structuredToolDefinitions: StructuredToolDefinition[] = [
         properties: {
           flightNumber: {
             type: 'string',
-            description: 'The airline flight number, for example PD218.',
+            description: 'The airline flight number, for example PD123.',
           },
         },
         required: ['flightNumber'],
@@ -404,7 +404,7 @@ export const structuredToolDefinitions: StructuredToolDefinition[] = [
         properties: {
           flightNumber: {
             type: 'string',
-            description: 'The airline flight number, for example PD218.',
+            description: 'The airline flight number, for example PD123.',
           },
         },
         required: ['flightNumber'],
@@ -423,7 +423,7 @@ export const structuredToolDefinitions: StructuredToolDefinition[] = [
         properties: {
           flightNumber: {
             type: 'string',
-            description: 'The airline flight number, for example PD218.',
+            description: 'The airline flight number, for example PD123.',
           },
         },
         required: ['flightNumber'],
@@ -442,7 +442,7 @@ export const structuredToolDefinitions: StructuredToolDefinition[] = [
         properties: {
           flightNumber: {
             type: 'string',
-            description: 'The airline flight number, for example PD218.',
+            description: 'The airline flight number, for example PD123.',
           },
           messageType: {
             type: 'string',
@@ -469,7 +469,7 @@ export const structuredToolDefinitions: StructuredToolDefinition[] = [
         properties: {
           flightNumber: {
             type: 'string',
-            description: 'The airline flight number, for example PD218.',
+            description: 'The airline flight number, for example PD123.',
           },
           role: {
             type: 'string',
@@ -496,7 +496,7 @@ export const structuredToolDefinitions: StructuredToolDefinition[] = [
         properties: {
           flightNumber: {
             type: 'string',
-            description: 'The airline flight number, for example PD218.',
+            description: 'The airline flight number, for example PD123.',
           },
         },
         required: ['flightNumber'],
